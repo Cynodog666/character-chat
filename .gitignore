@@ -29,3 +29,6 @@ tests/_tmp/
 Thumbs.db
 .idea/
 .vscode/
+
+# 迁移文件里有角色卡（含原文摘录），不进仓库
+export-lite.json

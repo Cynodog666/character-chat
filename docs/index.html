@@ -172,6 +172,16 @@
             <label>模型</label>
             <input id="cfgModel" placeholder="deepseek-chat">
         </div>
+
+        <div class="field">
+            <label>数据迁移</label>
+            <div class="actions" style="margin-top:0">
+                <button class="btn" id="importBtn">导入电脑端数据</button>
+                <button class="btn" id="exportBtn">导出备份</button>
+            </div>
+            <input type="file" id="importFile" accept="application/json,.json" hidden>
+            <div class="hint">导入只合并，不覆盖同名角色的聊天；导入后想启用剧情检索，还需把同一本小说传一次。</div>
+        </div>
         <div class="actions">
             <button class="btn" id="cfgCancel">取消</button>
             <button class="btn primary" id="cfgSave">保存</button>
@@ -1004,6 +1014,58 @@ $('cfgSave').onclick = async () => {
     await idbSet(K.cfg, cfg);
     setStatus($('cfgStatus'), '已保存', 'ok');
     setTimeout(() => $('settingsDlg').close(), 400);
+};
+
+/* 数据迁移 */
+$('importBtn').onclick = () => $('importFile').click();
+
+$('importFile').onchange = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setStatus($('cfgStatus'), '正在导入…');
+    try {
+        const text = await readFile(file);
+        const data = JSON.parse(text);
+
+        const personas = (await idbGet(K.personas)) || {};
+        const sessions = (await idbGet(K.sessions)) || {};
+        const memories = (await idbGet(K.memories)) || {};
+
+        Object.assign(personas, data.personas || {});
+        Object.assign(sessions, data.sessions || {});
+        Object.assign(memories, data.memories || {});
+
+        await idbSet(K.personas, personas);
+        await idbSet(K.sessions, sessions);
+        await idbSet(K.memories, memories);
+        await renderPersonaList();
+
+        const n = Object.keys(data.personas || {}).length;
+        setStatus($('cfgStatus'),
+            `已导入 ${n} 个角色、${Object.keys(data.sessions || {}).length} 份聊天记录、` +
+            `${Object.keys(data.memories || {}).length} 份记忆。小说还要自己传一次才能检索剧情。`, 'ok');
+    } catch (err) {
+        setStatus($('cfgStatus'), '导入失败：' + err.message, 'err');
+    }
+    e.target.value = '';
+};
+
+$('exportBtn').onclick = async () => {
+    const payload = {
+        version: 1,
+        exportedAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
+        personas: (await idbGet(K.personas)) || {},
+        sessions: (await idbGet(K.sessions)) || {},
+        memories: (await idbGet(K.memories)) || {},
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'export-lite.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    setStatus($('cfgStatus'), '已导出，文件在下载目录里', 'ok');
 };
 
 /* 导入 */
