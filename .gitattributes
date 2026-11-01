@@ -1,0 +1,7 @@
+# 批处理必须用 CRLF，否则 cmd 解析 if(...) 块会出错，双击后一闪而过
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 脚本类保持 LF
+*.sh  text eol=lf
+*.py  text eol=lf
