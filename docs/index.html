@@ -238,6 +238,7 @@
         <div class="actions" style="flex-direction:column;gap:8px">
             <button class="btn" id="clearMemBtn" style="width:100%">清除记忆</button>
             <button class="btn" id="clearSessBtn" style="width:100%">清空聊天记录</button>
+            <button class="btn" id="exportOneBtn" style="width:100%">导出这个角色</button>
             <button class="btn" id="delBtn" style="width:100%;color:#c0392b">删除角色</button>
         </div>
 
@@ -1087,23 +1088,57 @@ $('exportBtn2').onclick = () => {
     $('moreDlg').close();
     doExport('cfgStatus');
 };
+$('exportOneBtn').onclick = () => {
+    const name = state.persona && state.persona.name;
+    $('moreDlg').close();
+    if (name) doExportOne(name);
+};
 
-async function doExport(statusId) {
-    const payload = {
-        version: 1,
-        exportedAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
-        personas: (await idbGet(K.personas)) || {},
-        sessions: (await idbGet(K.sessions)) || {},
-        memories: (await idbGet(K.memories)) || {},
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+/** 触发浏览器下载一个 JSON 文件 */
+function downloadJSON(obj, filename) {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'export-lite.json';
+    a.download = filename;
+    document.body.appendChild(a);
     a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function stamp() {
+    return new Date().toISOString().slice(0, 16).replace('T', ' ');
+}
+
+/** 导出全部角色 */
+async function doExport(statusId) {
+    downloadJSON({
+        version: 1,
+        exportedAt: stamp(),
+        personas: (await idbGet(K.personas)) || {},
+        sessions: (await idbGet(K.sessions)) || {},
+        memories: (await idbGet(K.memories)) || {},
+    }, 'export-lite.json');
     setStatus($(statusId || importStatusId), '已导出，文件在下载目录里', 'ok');
+}
+
+/** 只导出某个角色：角色卡 + 它的聊天记录 + 它的记忆 */
+async function doExportOne(name) {
+    const personas = (await idbGet(K.personas)) || {};
+    const card = personas[name];
+    if (!card) return;
+
+    const sessions = (await idbGet(K.sessions)) || {};
+    const memories = (await idbGet(K.memories)) || {};
+
+    downloadJSON({
+        version: 1,
+        exportedAt: stamp(),
+        personas: { [name]: card },
+        sessions: sessions[name] ? { [name]: sessions[name] } : {},
+        memories: memories[name] ? { [name]: memories[name] } : {},
+    }, `角色-${name}.json`);
 }
 
 /* 导入 */
