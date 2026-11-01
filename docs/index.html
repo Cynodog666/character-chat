@@ -96,6 +96,26 @@
     }
     .composer button.on { background: var(--accent); color: #fff; cursor: pointer; }
 
+    /* ---------- 发图片 ---------- */
+    .preview {
+        flex-shrink: 0; padding: 10px 12px 0; background: #f5f5f5;
+        display: flex; gap: 10px; align-items: center;
+    }
+    .preview[hidden] { display: none; }
+    .preview img {
+        width: 58px; height: 58px; object-fit: cover; border-radius: 7px;
+        border: 1px solid var(--line); background: #fff;
+    }
+    .preview button {
+        width: 24px; height: 24px; border-radius: 50%; border: none;
+        background: rgba(0,0,0,.55); color: #fff; font-size: 15px; line-height: 1;
+        cursor: pointer; padding: 0;
+    }
+    .bubble .msg-img {
+        display: block; max-width: 100%; max-height: 260px;
+        border-radius: 6px; margin-bottom: 5px;
+    }
+
     /* ---------- 弹层 ---------- */
     dialog {
         /* 全局 * { margin: 0 } 会把浏览器默认的 margin:auto（居中）一起清掉，
@@ -161,11 +181,17 @@
         <button class="icon-btn" id="moreBtn" title="更多">⋯</button>
     </div>
     <div class="chat" id="chat"></div>
+    <div class="preview" id="previewBar" hidden>
+        <img id="previewImg" alt="">
+        <button id="previewDel" title="移除">×</button>
+    </div>
     <div class="composer">
+        <button class="icon-btn" id="imgBtn" title="发图片">＋</button>
         <textarea id="input" rows="1" placeholder="说点什么…"></textarea>
         <button id="sendBtn">发送</button>
     </div>
 </div>
+<input type="file" id="imgFile" accept="image/*" hidden>
 
 <!-- 设置 -->
 <dialog id="settingsDlg">
@@ -174,7 +200,7 @@
         <div class="field">
             <label>接口地址</label>
             <input id="cfgBase" placeholder="https://api.deepseek.com/v1">
-            <div class="hint">兼容 OpenAI 协议即可。DeepSeek / 硅基流动 允许浏览器直连，智谱不支持跨域。</div>
+            <div class="hint">兼容 OpenAI 协议即可。DeepSeek / 硅基流动 允许浏览器直连，智谱不支持跨域。<br>要发图片，模型得支持视觉，比如硅基流动的 <code>Qwen/Qwen2.5-VL-32B-Instruct</code>。</div>
         </div>
         <div class="field">
             <label>API Key</label>
@@ -272,6 +298,8 @@ const DEFAULT_CFG = {
 
 let cfg = { ...DEFAULT_CFG };
 let state = { persona: null, history: [], lastDay: '' };
+// 待发送的图片：send 是发给模型的大图，thumb 是存本地/显示用的小图
+let pendingImage = null;
 
 function esc(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -725,13 +753,15 @@ function buildSystemPrompt(card, memories, facts) {
 async function sendMessage() {
     const input = $('input');
     const text = input.value.trim();
-    if (!text || !state.persona) return;
+    if ((!text && !pendingImage) || !state.persona) return;
 
     const name = state.persona.name;
+    const img = pendingImage;
     input.value = '';
     input.style.height = 'auto';
+    clearPendingImage();
     updateSendBtn();
-    renderRow('user', text);
+    renderRow('user', text || '（图片）', undefined, img ? img.thumb : null);
 
     const pending = renderRow('assistant', '…');
 
@@ -743,21 +773,36 @@ async function sendMessage() {
         const system = buildSystemPrompt(state.persona, memories, facts);
 
         const messages = [{ role: 'system', content: system }];
-        for (const turn of state.history.slice(-16)) messages.push(turn);
-        messages.push({ role: 'user', content: text });
+        for (const turn of state.history.slice(-16)) {
+            // 历史里发过的图不再重复上传，换一句说明，省 token
+            if (turn.role === 'user' && turn.image) {
+                messages.push({ role: 'user', content: turn.content + '（对方发来一张图片）' });
+            } else {
+                messages.push({ role: turn.role, content: turn.content });
+            }
+        }
+        const userContent = img
+            ? [{ type: 'text', text: text || '看看这张图' },
+               { type: 'image_url', image_url: { url: img.send } }]
+            : text;
+        messages.push({ role: 'user', content: userContent });
 
         const reply = await llm(messages, 0.85);
         pending.remove();
         renderAssistantText(reply);
 
-        state.history.push({ role: 'user', content: text });
+        state.history.push({ role: 'user', content: text || '（图片）', image: img ? img.thumb : null });
         state.history.push({ role: 'assistant', content: reply });
         await saveSession(name, state.history);
 
         await rememberFact(name, text, reply);
     } catch (err) {
         pending.remove();
-        renderRow('assistant', '（出错了：' + err.message + '）');
+        let msg = err.message;
+        if (img && /image|vision|multimodal|unsupported|invalid/i.test(msg)) {
+            msg += '\n\n这张图可能没发出去：当前模型不支持看图。到设置里换成支持视觉的模型，比如硅基流动的 Qwen/Qwen2.5-VL-32B-Instruct。';
+        }
+        renderRow('assistant', '（出错了：' + msg + '）');
     } finally {
         updateSendBtn();
     }
@@ -799,7 +844,7 @@ function renderDay(ts) {
     chat.appendChild(div);
 }
 
-function renderRow(role, text, ts) {
+function renderRow(role, text, ts, image) {
     const chat = $('chat');
     if (ts !== undefined) renderDay(ts);
 
@@ -812,7 +857,18 @@ function renderRow(role, text, ts) {
 
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
-    bubble.textContent = text;
+    if (image) {
+        const im = document.createElement('img');
+        im.className = 'msg-img';
+        im.src = image;
+        im.alt = '';
+        bubble.appendChild(im);
+    }
+    if (text) {
+        const span = document.createElement('span');
+        span.textContent = text;
+        bubble.appendChild(span);
+    }
 
     row.appendChild(av);
     row.appendChild(bubble);
@@ -872,7 +928,7 @@ async function openChat(card) {
     if (history.length) {
         history.forEach((m, i) => {
             if (m.role === 'assistant') renderAssistantText(m.content, i === 0 ? todayStr() : undefined);
-            else renderRow('user', m.content, i === 0 ? todayStr() : undefined);
+            else renderRow('user', m.content, i === 0 ? todayStr() : undefined, m.image);
         });
     } else {
         renderRow('assistant', `（${card.name}抬起头看了你一眼）`);
@@ -890,7 +946,7 @@ function closeChat() {
 }
 
 function updateSendBtn() {
-    const has = $('input').value.trim().length > 0 && !!state.persona;
+    const has = ($('input').value.trim().length > 0 || !!pendingImage) && !!state.persona;
     $('sendBtn').disabled = !has;
     $('sendBtn').classList.toggle('on', has);
 }
@@ -907,6 +963,34 @@ function readFile(file) {
         reader.onload = () => resolve(String(reader.result || ''));
         reader.onerror = () => reject(reader.error);
         reader.readAsText(file, 'UTF-8');
+    });
+}
+
+/** 把图片压到指定边长，返回 dataURL。手机拍的原图动辄几 MB，直接发会很慢 */
+function fileToDataUrl(file, maxSide = 1024, quality = 0.82) {
+    return new Promise((resolve, reject) => {
+        const finish = (srcW, srcH, draw) => {
+            const scale = Math.min(1, maxSide / Math.max(srcW, srcH));
+            const w = Math.max(1, Math.round(srcW * scale));
+            const h = Math.max(1, Math.round(srcH * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            draw(canvas.getContext('2d'), w, h);
+            resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+            finish(img.naturalWidth, img.naturalHeight, (ctx, w, h) => ctx.drawImage(img, 0, 0, w, h));
+            URL.revokeObjectURL(url);
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            reject(new Error('这张图读不了，换一张试试'));
+        };
+        img.src = url;
     });
 }
 
@@ -1158,6 +1242,36 @@ $('buildBtn').onclick = buildPersona;
 $('charInput').addEventListener('input', () => {
     $('buildBtn').disabled = !importState.source || !$('charInput').value.trim();
 });
+
+/* 发图片 */
+$('imgBtn').onclick = () => $('imgFile').click();
+
+$('imgFile').onchange = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+        const send = await fileToDataUrl(file, 1024, 0.82);
+        const thumb = await fileToDataUrl(file, 240, 0.7);
+        pendingImage = { send, thumb };
+        $('previewImg').src = thumb;
+        $('previewBar').hidden = false;
+        updateSendBtn();
+    } catch (err) {
+        alert('读取图片失败：' + err.message);
+    }
+};
+
+$('previewDel').onclick = () => {
+    clearPendingImage();
+    updateSendBtn();
+};
+
+function clearPendingImage() {
+    pendingImage = null;
+    $('previewImg').src = '';
+    $('previewBar').hidden = true;
+}
 
 /* 角色菜单 */
 $('moreBtn').onclick = async () => {
