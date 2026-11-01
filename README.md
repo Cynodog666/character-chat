@@ -201,6 +201,31 @@ netsh advfirewall firewall add rule name="character-chat" dir=in action=allow pr
 > 能添加到主屏幕，但拿不到离线缓存；想要完整体验，得部署到 HTTPS（见下）。
 
 图片资源在 `web/icons/`，由 `scripts/make_icons.py` 生成，想换图改脚本重跑即可。
+### 纯前端版：不用服务器、不用开电脑
+
+`docs/` 里是一个**完全没有后端**的独立版本。切分、检索、角色卡、记忆、会话全在浏览器里跑，
+数据存在 IndexedDB，只有调用大模型那一步才联网。
+
+部署到 GitHub Pages 后，手机打开一个网址就能用：
+
+1. 仓库 `Settings` → `Pages` → Source 选 `Deploy from a branch`
+2. 分支选 `main`，目录选 `/docs`，保存
+3. 等一两分钟，访问 `https://<用户名>.github.io/character-chat/`
+4. 第一次打开会要求填 API Key（只存在你自己的浏览器里）
+
+和 Python 版的差别：
+
+| | Python 版 | 纯前端版 |
+|---|---|---|
+| 需要服务器 | 要 | **不要** |
+| 数据存哪 | 电脑/服务器磁盘 | 手机浏览器 IndexedDB |
+| 向量检索 | bge-m3 + Chroma | 本地 bigram 哈希（词面相似） |
+| 支持 PDF | 有 | 只吃 txt / md |
+| 别人能否用你的 key | 能（访问你的服务） | 不能（key 只在你设备） |
+
+**CORS 限制**：DeepSeek、硅基流动允许浏览器直连；智谱不返回跨域头，用不了。
+填接口地址时注意。
+
 ### 部署到公网（想在哪儿都能用才需要）
 
 局域网只能在同一个 Wi-Fi 下用。要随时随地打开，把后端部署到有 HTTPS 的公网服务：

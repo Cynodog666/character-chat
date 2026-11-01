@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<title>角色对话</title>
+<meta name="theme-color" content="#1f2430">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="角色对话">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    :root {
+        --bg: #f5f5f5;
+        --card: #ffffff;
+        --line: #e6e6e6;
+        --text: #191919;
+        --sub: #999;
+        --accent: #07c160;
+        --self: #95ec69;
+    }
+    html, body { height: 100%; }
+    body {
+        font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        background: var(--bg); color: var(--text); font-size: 15px;
+        height: 100vh; height: 100dvh; overflow: hidden;
+    }
+
+    .screen { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+    .screen.hidden { display: none; }
+
+    /* ---------- 顶栏 ---------- */
+    .bar {
+        flex-shrink: 0; height: 52px; padding: 0 12px calc(0px + env(safe-area-inset-top)) 12px;
+        padding-top: env(safe-area-inset-top);
+        display: flex; align-items: center; gap: 8px;
+        background: #ededed; border-bottom: 1px solid var(--line);
+    }
+    .bar .title { flex: 1; font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .icon-btn {
+        width: 36px; height: 36px; border: none; background: none; border-radius: 8px;
+        font-size: 20px; line-height: 1; color: #444; cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .icon-btn:active { background: rgba(0,0,0,.08); }
+
+    /* ---------- 角色列表 ---------- */
+    .list { flex: 1; overflow-y: auto; }
+    .persona {
+        display: flex; gap: 12px; align-items: center; padding: 14px 16px;
+        background: var(--card); border-bottom: 1px solid #f0f0f0; cursor: pointer;
+    }
+    .persona:active { background: #f0f0f0; }
+    .avatar {
+        width: 44px; height: 44px; border-radius: 8px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        color: #fff; font-weight: 700; font-size: 18px; background: #7c5cff;
+    }
+    .p-main { min-width: 0; flex: 1; }
+    .p-name { font-size: 15px; font-weight: 600; margin-bottom: 3px; }
+    .p-desc { font-size: 12.5px; color: var(--sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .empty { padding: 60px 30px; text-align: center; color: var(--sub); font-size: 13.5px; line-height: 2; }
+
+    /* ---------- 聊天 ---------- */
+    .chat { flex: 1; overflow-y: auto; padding: 14px 12px; display: flex; flex-direction: column; gap: 12px; }
+    .day { text-align: center; font-size: 12px; color: #b2b2b2; margin: 2px 0; }
+    .row { display: flex; gap: 8px; align-items: flex-start; }
+    .row.me { flex-direction: row-reverse; }
+    .row .avatar { width: 36px; height: 36px; font-size: 15px; border-radius: 6px; }
+    .row.me .avatar { background: #b0b0b0; }
+    .bubble {
+        max-width: 76%; padding: 9px 13px; border-radius: 8px; line-height: 1.65;
+        background: #fff; font-size: 15px; white-space: pre-wrap; word-break: break-word;
+    }
+    .row.me .bubble { background: var(--self); }
+
+    .composer {
+        flex-shrink: 0; padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+        background: #f5f5f5; border-top: 1px solid var(--line);
+        display: flex; gap: 8px; align-items: flex-end;
+    }
+    .composer textarea {
+        flex: 1; min-height: 40px; max-height: 110px; resize: none; outline: none;
+        border: 1px solid #ddd; background: #fff; border-radius: 8px;
+        padding: 9px 12px; font-size: 15px; font-family: inherit; line-height: 1.5;
+    }
+    .composer button {
+        height: 40px; padding: 0 18px; border: none; border-radius: 8px;
+        background: #dcdcdc; color: #999; font-size: 15px; cursor: not-allowed;
+    }
+    .composer button.on { background: var(--accent); color: #fff; cursor: pointer; }
+
+    /* ---------- 弹层 ---------- */
+    dialog {
+        border: none; border-radius: 14px; padding: 0; width: min(92vw, 420px);
+        max-height: 86vh; overflow: hidden; background: #fff;
+    }
+    dialog::backdrop { background: rgba(0,0,0,.45); }
+    .dlg-body { padding: 18px 18px 16px; max-height: 86vh; overflow-y: auto; }
+    .dlg-title { font-size: 16px; font-weight: 600; margin-bottom: 14px; }
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 12.5px; color: var(--sub); margin-bottom: 6px; }
+    .field input, .field textarea, .field select {
+        width: 100%; padding: 10px 12px; font-size: 14px; font-family: inherit;
+        border: 1px solid #ddd; border-radius: 8px; outline: none;
+    }
+    .field input:focus, .field textarea:focus { border-color: var(--accent); }
+    .field .hint { font-size: 11.5px; color: var(--sub); margin-top: 5px; line-height: 1.6; }
+    .actions { display: flex; gap: 10px; margin-top: 6px; }
+    .btn {
+        flex: 1; padding: 11px; border-radius: 9px; border: 1px solid #ddd;
+        background: #f7f7f7; color: #333; font-size: 14.5px; cursor: pointer;
+    }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .status { font-size: 12.5px; color: var(--sub); margin-top: 10px; line-height: 1.7; word-break: break-word; }
+    .status.err { color: #c0392b; }
+    .status.ok { color: #0a8f45; }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 8px 0; }
+    .chip {
+        padding: 7px 13px; border-radius: 16px; border: 1px solid #e0e0e0;
+        background: #fafafa; font-size: 13.5px; cursor: pointer;
+    }
+    .chip.active { background: #e8faf0; border-color: var(--accent); color: #0a8f45; }
+</style>
+</head>
+<body>
+
+<!-- 列表 -->
+<div class="screen" id="listScreen">
+    <div class="bar">
+        <span class="title">角色</span>
+        <button class="icon-btn" id="settingsBtn" title="设置">⚙</button>
+        <button class="icon-btn" id="addBtn" title="新建">＋</button>
+    </div>
+    <div class="list" id="personaList"></div>
+</div>
+
+<!-- 聊天 -->
+<div class="screen hidden" id="chatScreen">
+    <div class="bar">
+        <button class="icon-btn" id="backBtn" title="返回">‹</button>
+        <span class="title" id="chatTitle">—</span>
+        <button class="icon-btn" id="moreBtn" title="更多">⋯</button>
+    </div>
+    <div class="chat" id="chat"></div>
+    <div class="composer">
+        <textarea id="input" rows="1" placeholder="说点什么…"></textarea>
+        <button id="sendBtn">发送</button>
+    </div>
+</div>
+
+<!-- 设置 -->
+<dialog id="settingsDlg">
+    <div class="dlg-body">
+        <div class="dlg-title">设置</div>
+        <div class="field">
+            <label>接口地址</label>
+            <input id="cfgBase" placeholder="https://api.deepseek.com/v1">
+            <div class="hint">兼容 OpenAI 协议即可。DeepSeek / 硅基流动 允许浏览器直连，智谱不支持跨域。</div>
+        </div>
+        <div class="field">
+            <label>API Key</label>
+            <input id="cfgKey" type="password" placeholder="sk-...">
+            <div class="hint">⚠️ 只保存在这台手机的浏览器里，不会上传到任何地方。但浏览器存储不是保险箱，公共设备别填。</div>
+        </div>
+        <div class="field">
+            <label>模型</label>
+            <input id="cfgModel" placeholder="deepseek-chat">
+        </div>
+        <div class="actions">
+            <button class="btn" id="cfgCancel">取消</button>
+            <button class="btn primary" id="cfgSave">保存</button>
+        </div>
+        <div class="status" id="cfgStatus"></div>
+    </div>
+</dialog>
+
+<!-- 导入小说 -->
+<dialog id="importDlg">
+    <div class="dlg-body">
+        <div class="dlg-title">新建角色</div>
+
+        <div class="field">
+            <label>1 · 选小说文件（.txt / .md）</label>
+            <input type="file" id="fileInput" accept=".txt,.md,text/plain,text/markdown">
+            <div class="hint" id="fileHint">文件只留在手机上，不会上传。</div>
+        </div>
+
+        <div class="field">
+            <label>2 · 角色名</label>
+            <input id="charInput" placeholder="例如：魏谦">
+            <div class="hint">填你记得的那个名字，或者点下面「让模型找」。</div>
+            <button class="btn" id="scanBtn" style="margin-top:8px">让模型找角色</button>
+            <div class="chips" id="charChips"></div>
+        </div>
+
+        <div class="actions">
+            <button class="btn" id="impCancel">取消</button>
+            <button class="btn primary" id="buildBtn" disabled>生成角色卡</button>
+        </div>
+        <div class="status" id="impStatus"></div>
+    </div>
+</dialog>
+
+<!-- 角色菜单 -->
+<dialog id="moreDlg">
+    <div class="dlg-body">
+        <div class="dlg-title" id="moreName">—</div>
+        <div class="field"><div class="hint" id="moreDesc"></div></div>
+        <div class="actions" style="flex-direction:column;gap:8px">
+            <button class="btn" id="clearMemBtn" style="width:100%">清除记忆</button>
+            <button class="btn" id="clearSessBtn" style="width:100%">清空聊天记录</button>
+            <button class="btn" id="delBtn" style="width:100%;color:#c0392b">删除角色</button>
+            <button class="btn" id="moreCancel" style="width:100%">关闭</button>
+        </div>
+    </div>
+</dialog>
+
+<script>
+'use strict';
+
+/* =========================================================================
+ * 0. 基础工具
+ * ========================================================================= */
+
+const $ = (id) => document.getElementById(id);
+
+const DEFAULT_CFG = {
+    base: 'https://api.deepseek.com/v1',
+    key: '',
+    model: 'deepseek-chat',
+};
+
+let cfg = { ...DEFAULT_CFG };
+let state = { persona: null, history: [], lastDay: '' };
+
+function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function setStatus(el, msg, kind = '') {
+    el.textContent = msg;
+    el.className = 'status ' + kind;
+}
+
+/* =========================================================================
+ * 1. IndexedDB：全部数据只存这台设备
+ * ========================================================================= */
+
+const DB_NAME = 'character-chat-lite';
+const STORE = 'kv';
+let dbPromise = null;
+
+function openDB() {
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+    return dbPromise;
+}
+
+async function idbGet(key) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, 'readonly');
+        const req = tx.objectStore(STORE).get(key);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+
+async function idbSet(key, value) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, 'readwrite');
+        tx.objectStore(STORE).put(value, key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+}
+
+async function idbDel(key) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, 'readwrite');
+        tx.objectStore(STORE).delete(key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+}
+
+/* 数据键 */
+const K = {
+    cfg: 'config',
+    personas: 'personas',       // { name: card }
+    sessions: 'sessions',       // { name: [msg] }
+    memories: 'memories',       // { name: [fact] }
+    corpus: (src) => `corpus:${src}`,  // { source, chunks, vectors }
+    corpusIndex: 'corpus-index',       // [source, ...]
+};
+
+/* =========================================================================
+ * 2. 文本处理：切分 + 本地向量 + 余弦
+ * ========================================================================= */
+
+const CHUNK_SIZE = 512;
+const CHUNK_OVERLAP = 64;
+const VEC_DIM = 1024;
+
+function normalizeText(text) {
+    return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+        .replace(/[ \t\u3000]+/g, ' ')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n[ \t]+/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+/** 按段落切块，优先在句末断开，相邻块留重叠 */
+function chunkText(text, size = CHUNK_SIZE, overlap = CHUNK_OVERLAP) {
+    const src = normalizeText(text);
+    if (!src) return [];
+    if (src.length <= size) return [src];
+
+    const ends = '。！？!?；;\n';
+    const out = [];
+    let start = 0;
+
+    while (start < src.length) {
+        let end = Math.min(start + size, src.length);
+        if (end < src.length) {
+            const win = src.slice(start, end);
+            let cut = -1;
+            for (const ch of ends) cut = Math.max(cut, win.lastIndexOf(ch));
+            if (cut >= Math.floor(size / 2)) end = start + cut + 1;
+        }
+        const piece = src.slice(start, end).trim();
+        if (piece) out.push(piece);
+        if (end >= src.length) break;
+        start = Math.max(end - overlap, start + 1);
+    }
+    return out;
+}
+
+/** 从 Markdown / 中文章节里找标题，返回 [{title, body}] */
+function splitSections(text) {
+    const lines = text.split('\n');
+    const marks = [];
+    let offset = 0;
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+        const isMd = /^#{1,6}\s+/.test(trimmed);
+        const isCn = /^(\d+[、.．]\s*)?第[0-9一二三四五六七八九十百千零〇两]+[章节回卷部篇]/.test(trimmed);
+        if (isMd || isCn) marks.push({ pos: offset, title: trimmed.replace(/^#{1,6}\s+/, '') });
+        offset += line.length + 1;
+    }
+
+    if (!marks.length) return [{ title: '', body: text }];
+
+    const out = [];
+    if (marks[0].pos > 0) {
+        const head = text.slice(0, marks[0].pos).trim();
+        if (head) out.push({ title: '', body: head });
+    }
+    for (let i = 0; i < marks.length; i++) {
+        const from = marks[i].pos + marks[i].title.length;
+        const to = i + 1 < marks.length ? marks[i + 1].pos : text.length;
+        const body = text.slice(marks[i].pos, to).trim();
+        if (body) out.push({ title: marks[i].title, body });
+    }
+    return out;
+}
+
+/** FNV-1a 32 位，稳定且够快 */
+function hash32(str) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h >>> 0;
+}
+
+/** 本地向量：中文字符 bigram 哈希。不联网，只反映字面相似 */
+function embedText(text) {
+    const vec = new Float32Array(VEC_DIM);
+    const compact = text.replace(/\s+/g, '');
+    for (let i = 0; i < compact.length - 1; i++) {
+        vec[hash32(compact.slice(i, i + 2)) % VEC_DIM] += 1;
+    }
+    let norm = 0;
+    for (let i = 0; i < VEC_DIM; i++) norm += vec[i] * vec[i];
+    norm = Math.sqrt(norm) || 1;
+    for (let i = 0; i < VEC_DIM; i++) vec[i] /= norm;
+    return vec;
+}
+
+function cosine(a, b) {
+    let dot = 0, na = 0, nb = 0;
+    for (let i = 0; i < a.length; i++) {
+        dot += a[i] * b[i];
+        na += a[i] * a[i];
+        nb += b[i] * b[i];
+    }
+    return dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
+}
+
+/** 在某个语料里检索 top-k */
+async function searchCorpus(source, query, topK = 3) {
+    const corpus = await idbGet(K.corpus(source));
+    if (!corpus || !corpus.chunks.length) return [];
+    const qv = embedText(query);
+
+    const scored = corpus.chunks.map((chunk, i) => ({
+        text: chunk.text,
+        section: chunk.section,
+        score: cosine(qv, corpus.vectors[i]),
+    }));
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, topK);
+}
+
+/* =========================================================================
+ * 3. 模型调用
+ * ========================================================================= */
+
+async function llm(messages, temperature = 0.8) {
+    if (!cfg.key) throw new Error('还没填 API Key，点右上角 ⚙ 设置');
+    const url = cfg.base.replace(/\/+$/, '') + '/chat/completions';
+
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + cfg.key,
+        },
+        body: JSON.stringify({
+            model: cfg.model,
+            messages,
+            temperature,
+            stream: false,
+        }),
+    });
+
+    if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(`接口 ${res.status}：${detail.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    return (data.choices && data.choices[0] && data.choices[0].message.content) || '';
+}
+
+function parseJSON(raw, expectArray = false) {
+    let text = String(raw || '').trim();
+    const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fence) text = fence[1].trim();
+
+    try {
+        const parsed = JSON.parse(text);
+        if (expectArray) return Array.isArray(parsed) ? parsed : [];
+        return parsed;
+    } catch (e) { /* 继续尝试截取 */ }
+
+    const open = expectArray ? '[' : '{';
+    const close = expectArray ? ']' : '}';
+    const start = text.indexOf(open);
+    const end = text.lastIndexOf(close);
+    if (start !== -1 && end > start) {
+        try {
+            const parsed = JSON.parse(text.slice(start, end + 1));
+            if (expectArray) return Array.isArray(parsed) ? parsed : [];
+            return parsed;
+        } catch (e) { /* 放弃 */ }
+    }
+    throw new Error('模型没有返回可解析的 JSON');
+}
+
+/* =========================================================================
+ * 4. 角色卡
+ * ========================================================================= */
+
+const EXTRACT_PROMPT = `下面是一部小说的原文。请抽取「{name}」这个角色的人物设定。
+
+硬性要求：
+1. 所有字段必须能在原文中找到依据，不要臆造。
+2. example_lines 必须逐字摘录原文中该角色的对白，不得改写、不得续写。
+3. 按故事结局时的状态来写：年龄、身份、处境、说话方式都以结尾为准。
+4. knows 写这个角色亲身经历、参与或在场看到的事，尽量写全。
+5. does_not_know 只写小说里完全没写的事（比如角色后来的生活、书外的事），剧情里已经发生的不要写。
+6. taboos 只写性格上不愿被提起的东西（外号、羞辱经历），不要写剧情事实。
+7. 输出严格 JSON，不要解释，不要代码块：
+
+{
+  "name": "角色名",
+  "identity": "身份，一句话",
+  "age_range": "大致年龄",
+  "personality": ["性格关键词，3-5 个"],
+  "speech_style": "说话方式：语气、句子长短、用词习惯、有无方言",
+  "catchphrases": ["原文里反复出现的说法"],
+  "relationships": [{"who": "对方", "relation": "关系", "attitude": "对他的态度"}],
+  "example_lines": ["原文对白1", "原文对白2", "原文对白3"],
+  "taboos": ["不愿提的话题"]
+}
+
+原文：
+{text}`;
+
+/** 取样：分层 + 优先提到该角色的段落 */
+function collectMaterial(text, name, budget = 12000) {
+    const paragraphs = text.split('\n').map((p) => p.trim()).filter(Boolean);
+    if (!paragraphs.length) return '';
+
+    const strata = Math.max(1, Math.min(5, paragraphs.length));
+    const per = Math.floor(budget / strata);
+    const picked = [];
+
+    for (let s = 0; s < strata; s++) {
+        const lo = Math.floor((paragraphs.length * s) / strata);
+        const hi = Math.floor((paragraphs.length * (s + 1)) / strata);
+        const block = paragraphs.slice(lo, hi).map((p, i) => {
+            let score = 0;
+            if (name && p.includes(name)) score += 5;
+            if (/[「“"][^」”"]{2,80}[」”"]/.test(p)) score += 2;
+            if (p.length <= 400) score += 1;
+            return { score, idx: lo + i, text: p };
+        });
+        block.sort((a, b) => b.score - a.score || a.idx - b.idx);
+
+        let used = 0;
+        for (const item of block) {
+            if (used + item.text.length > per) continue;
+            picked.push(item);
+            used += item.text.length;
+            if (used >= per * 0.95) break;
+        }
+    }
+
+    picked.sort((a, b) => a.idx - b.idx);
+    return picked.map((p) => p.text).join('\n');
+}
+
+async function extractPersona(source, name) {
+    const corpus = await idbGet(K.corpus(source));
+    if (!corpus) throw new Error('找不到那篇文档，重新上传一次');
+
+    const raw = corpus.fullText || '';
+    const material = collectMaterial(raw, name, 12000);
+    const content = EXTRACT_PROMPT.replace('{name}', name).replace('{text}', material);
+    const reply = await llm([{ role: 'user', content }], 0.3);
+
+    const card = parseJSON(reply);
+    card.name = card.name || name;
+    for (const f of ['personality', 'catchphrases', 'example_lines', 'taboos', 'does_not_know']) {
+        if (!Array.isArray(card[f])) card[f] = card[f] ? [String(card[f])] : [];
+    }
+    if (!Array.isArray(card.relationships)) card.relationships = [];
+    card.source = source;
+    return card;
+}
+
+async function listCharacters(source) {
+    const corpus = await idbGet(K.corpus(source));
+    const raw = corpus && corpus.fullText ? corpus.fullText : '';
+    const material = collectMaterial(raw, '', 10000);
+
+    const reply = await llm([{
+        role: 'user',
+        content: `从下面这段小说原文里找出最重要的 5 个角色，输出 JSON 数组，每项 {"name":"角色名","role":"主角或配角","one_line":"一句话概括"}。只输出数组。\n\n原文：\n${material}`,
+    }], 0.2);
+
+    const arr = parseJSON(reply, true);
+    return arr.filter((x) => x && x.name).slice(0, 5);
+}
+
+/* =========================================================================
+ * 5. 长期记忆
+ * ========================================================================= */
+
+async function loadMemories(name) {
+    const all = (await idbGet(K.memories)) || {};
+    return all[name] || [];
+}
+
+async function saveMemories(name, facts) {
+    const all = (await idbGet(K.memories)) || {};
+    all[name] = facts.slice(-50);
+    await idbSet(K.memories, all);
+}
+
+const MEM_PROMPT = `从下面这段对话里，抽取「对方」说的、值得长期记住的事实。
+
+只抽：称呼与身份（名字、职业、年龄、所在地）、稳定的偏好、重要经历、和角色的约定。
+不要抽：一次性的情绪、关于角色自己的描述、你推测的东西。
+
+已有主题（能归到其中之一就复用 topic，内容会被覆盖）：
+{topics}
+
+对话：
+对方：{user}
+角色：{reply}
+
+输出 JSON 数组，每项 {"topic":"简短主题","content":"一句话事实"}。没有就输出 []。`;
+
+async function rememberFact(name, userMsg, reply) {
+    try {
+        const existing = await loadMemories(name);
+        const topics = existing.map((f) => f.topic).slice(-20).join('、') || '（暂无）';
+        const raw = await llm([{
+            role: 'user',
+            content: MEM_PROMPT.replace('{topics}', topics).replace('{user}', userMsg).replace('{reply}', reply),
+        }], 0);
+
+        const arr = parseJSON(raw, true);
+        if (!arr.length) return [];
+
+        const map = new Map(existing.map((f) => [f.topic.replace(/\s+/g, ''), f]));
+        const added = [];
+        for (const item of arr) {
+            if (!item || !item.content) continue;
+            const topic = String(item.topic || item.content.slice(0, 12)).replace(/\s+/g, '');
+            map.set(topic, { topic, content: String(item.content), updated_at: Date.now() });
+            added.push({ topic, content: item.content });
+        }
+        await saveMemories(name, [...map.values()]);
+        return added;
+    } catch (e) {
+        return [];
+    }
+}
+
+/* =========================================================================
+ * 6. 对话
+ * ========================================================================= */
+
+function buildSystemPrompt(card, memories, facts) {
+    const L = [];
+    L.push(`你就是「${card.name}」${card.identity ? '，' + card.identity : ''}。你是一个活人，不是 AI、不是助手。`);
+
+    if (card.personality && card.personality.length) L.push(`\n【你的性子】\n${card.personality.join('、')}`);
+    if (card.speech_style) L.push(`\n【你怎么说话】\n${card.speech_style}`);
+    if (card.catchphrases && card.catchphrases.length) L.push(`\n【常挂嘴边的话】\n${card.catchphrases.map((c) => `「${c}」`).join('；')}`);
+    if (card.example_lines && card.example_lines.length) L.push(`\n【你平时这么讲话（摘自原文，语气照这个来）】\n${card.example_lines.map((l) => '- ' + l).join('\n')}`);
+
+    if (card.relationships && card.relationships.length) {
+        L.push(`\n【你身边的人】\n${card.relationships.map((r) => `- ${r.who}：${r.relation || ''}${r.attitude ? '，' + r.attitude : ''}`).join('\n')}`);
+    }
+
+    L.push('\n【你对这一切的了解】\n这部作品里发生的事，从头到尾你都知道——谁跟谁是什么关系、后来出了什么事，你都清楚。对方聊到任何情节你都能接，不用回避，也不用装作不知道。');
+    L.push('注意：可以嘴上嫌麻烦、可以骂骂咧咧，但对方认真追问时，你得把事说清楚，不能一直打太极把话堵死。');
+
+    if (card.does_not_know && card.does_not_know.length) {
+        L.push(`\n书里完全没写的事，你是真没经历过：${card.does_not_know.join('；')}\n这些只能按你的性子推测，别当成真事说。`);
+    }
+
+    if (card.taboos && card.taboos.length) {
+        L.push(`\n【你不愿多提的】\n${card.taboos.join('；')}\n这些话题你心里有数，只是不爱说。对方问起可以岔开、可以甩脸子，但别装作不知道。`);
+    }
+
+    if (facts && facts.length) {
+        L.push(`\n【你记得对方的事】\n${facts.map((f) => '- ' + f.content).join('\n')}\n这些是对方亲口告诉你的。顺着聊可以自然提起，但别一次全倒出来。`);
+    }
+
+    if (memories && memories.length) {
+        L.push(`\n【你记得的这些片段（原文，可自然带出，别照念）】\n${memories.map((m) => '- ' + m.text).join('\n')}`);
+    }
+
+    L.push(`\n【说话规矩】
+1. 你是在用手机跟人聊天，像发微信一样，不是面对面讲话。
+2. 绝对不要写动作、神态、心理活动，不要用括号加任何提示。「（皱眉）」「（沉默两秒）」这类一律不许出现。
+3. 一次只回一两句，短。想说的多就分几行写，一行会被当成一条独立消息发出去。
+4. 口语，标点随意，可以用「……」「嗯」「啊」「行」这些。
+5. 全程第一人称，只说这个人会说的话。
+6. 不许提「小说」「设定」「角色扮演」「AI」「模型」这些词。
+7. 真有不知道的，就用这个人的方式说不知道。`);
+
+    return L.join('\n');
+}
+
+async function sendMessage() {
+    const input = $('input');
+    const text = input.value.trim();
+    if (!text || !state.persona) return;
+
+    const name = state.persona.name;
+    input.value = '';
+    input.style.height = 'auto';
+    updateSendBtn();
+    renderRow('user', text);
+
+    const pending = renderRow('assistant', '…');
+
+    try {
+        const [facts, memories] = await Promise.all([
+            loadMemories(name),
+            state.persona.source ? searchCorpus(state.persona.source, text, 3) : Promise.resolve([]),
+        ]);
+        const system = buildSystemPrompt(state.persona, memories, facts);
+
+        const messages = [{ role: 'system', content: system }];
+        for (const turn of state.history.slice(-16)) messages.push(turn);
+        messages.push({ role: 'user', content: text });
+
+        const reply = await llm(messages, 0.85);
+        pending.remove();
+        renderAssistantText(reply);
+
+        state.history.push({ role: 'user', content: text });
+        state.history.push({ role: 'assistant', content: reply });
+        await saveSession(name, state.history);
+
+        await rememberFact(name, text, reply);
+    } catch (err) {
+        pending.remove();
+        renderRow('assistant', '（出错了：' + err.message + '）');
+    } finally {
+        updateSendBtn();
+    }
+}
+
+/* =========================================================================
+ * 7. 会话记录
+ * ========================================================================= */
+
+async function loadSession(name) {
+    const all = (await idbGet(K.sessions)) || {};
+    return all[name] || [];
+}
+
+async function saveSession(name, messages) {
+    const all = (await idbGet(K.sessions)) || {};
+    all[name] = messages.slice(-400);
+    await idbSet(K.sessions, all);
+}
+
+/* =========================================================================
+ * 8. 渲染
+ * ========================================================================= */
+
+function todayStr() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function renderDay(ts) {
+    const chat = $('chat');
+    const day = ts ? String(ts).slice(0, 10) : todayStr();
+    const label = day === todayStr() ? '今天' : day;
+    if (state.lastDay === label) return;
+    state.lastDay = label;
+    const div = document.createElement('div');
+    div.className = 'day';
+    div.textContent = label;
+    chat.appendChild(div);
+}
+
+function renderRow(role, text, ts) {
+    const chat = $('chat');
+    if (ts !== undefined) renderDay(ts);
+
+    const row = document.createElement('div');
+    row.className = 'row' + (role === 'user' ? ' me' : '');
+
+    const av = document.createElement('span');
+    av.className = 'avatar';
+    av.textContent = role === 'user' ? '我' : (state.persona ? state.persona.name.slice(0, 1) : '?');
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = text;
+
+    row.appendChild(av);
+    row.appendChild(bubble);
+    chat.appendChild(row);
+    chat.scrollTop = chat.scrollHeight;
+    return row;
+}
+
+/** 助手回复按行拆成多条消息，像真的在发微信 */
+function renderAssistantText(text, ts) {
+    const lines = String(text || '').split('\n').map((s) => s.trim()).filter(Boolean);
+    const list = (lines.length ? lines : ['…']).slice(0, 8);
+    list.forEach((line, i) => renderRow('assistant', line, i === 0 ? ts : undefined));
+}
+
+async function renderPersonaList() {
+    const all = (await idbGet(K.personas)) || {};
+    const list = $('personaList');
+    const names = Object.keys(all);
+
+    if (!names.length) {
+        list.innerHTML = '<div class="empty">还没有角色<br>点右上角 ＋ 上传一本小说</div>';
+        return;
+    }
+
+    list.innerHTML = names.map((n) => {
+        const p = all[n];
+        return `<div class="persona" data-name="${esc(n)}">
+            <span class="avatar">${esc(n.slice(0, 1))}</span>
+            <span class="p-main">
+                <div class="p-name">${esc(n)}</div>
+                <div class="p-desc">${esc(p.identity || '')}</div>
+            </span>
+        </div>`;
+    }).join('');
+
+    list.querySelectorAll('.persona').forEach((el) => {
+        el.onclick = async () => {
+            const p = all[el.dataset.name];
+            if (p) await openChat(p);
+        };
+    });
+}
+
+async function openChat(card) {
+    state.persona = card;
+    state.history = [];
+    state.lastDay = '';
+
+    $('chatTitle').textContent = card.name;
+    $('chat').innerHTML = '';
+    $('listScreen').classList.add('hidden');
+    $('chatScreen').classList.remove('hidden');
+
+    const history = await loadSession(card.name);
+    state.history = history;
+    if (history.length) {
+        history.forEach((m, i) => {
+            if (m.role === 'assistant') renderAssistantText(m.content, i === 0 ? todayStr() : undefined);
+            else renderRow('user', m.content, i === 0 ? todayStr() : undefined);
+        });
+    } else {
+        renderRow('assistant', `（${card.name}抬起头看了你一眼）`);
+    }
+    updateSendBtn();
+    $('input').focus();
+}
+
+function closeChat() {
+    $('chatScreen').classList.add('hidden');
+    $('listScreen').classList.remove('hidden');
+    state.persona = null;
+    state.history = [];
+    renderPersonaList();
+}
+
+function updateSendBtn() {
+    const has = $('input').value.trim().length > 0 && !!state.persona;
+    $('sendBtn').disabled = !has;
+    $('sendBtn').classList.toggle('on', has);
+}
+
+/* =========================================================================
+ * 9. 导入流程
+ * ========================================================================= */
+
+let importState = { source: null, chars: [] };
+
+function readFile(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(file, 'UTF-8');
+    });
+}
+
+async function handleFile(file) {
+    if (!file) return;
+    setStatus($('impStatus'), '正在读取并切分…');
+
+    try {
+        let text = await readFile(file);
+        // 简单编码兜底：如果满屏乱码，说明不是 UTF-8
+        if ((text.match(/\uFFFD/g) || []).length > text.length * 0.01) {
+            const buf = await file.arrayBuffer();
+            text = new TextDecoder('gb18030').decode(buf);
+        }
+
+        const sections = splitSections(text);
+        const chunks = [];
+        for (const sec of sections) {
+            for (const piece of chunkText(sec.body)) {
+                chunks.push({ text: piece, section: sec.title });
+            }
+        }
+        if (!chunks.length) throw new Error('这个文件里没读到内容');
+
+        const vectors = chunks.map((c) => embedText(c.text));
+        const source = file.name;
+
+        await idbSet(K.corpus(source), {
+            source,
+            chunks,
+            vectors,
+            fullText: text.slice(0, 1200000),   // 保留原文供角色卡取样，上限 ~120 万字
+            sections: sections.length,
+            createdAt: Date.now(),
+        });
+
+        importState.source = source;
+        setStatus($('impStatus'), `${source}：${sections.length} 段，${chunks.length} 块（数据只在手机里）`, 'ok');
+        $('buildBtn').disabled = !$('charInput').value.trim();
+    } catch (err) {
+        setStatus($('impStatus'), '读取失败：' + err.message, 'err');
+    }
+}
+
+async function scanCharacters() {
+    if (!importState.source) return setStatus($('impStatus'), '先选一个文件', 'err');
+    setStatus($('impStatus'), '正在读原文找角色…');
+    $('scanBtn').disabled = true;
+
+    try {
+        const chars = await listCharacters(importState.source);
+        importState.chars = chars;
+
+        const box = $('charChips');
+        box.innerHTML = chars.map((c, i) =>
+            `<span class="chip" data-i="${i}">${esc(c.name)}</span>`
+        ).join('');
+        box.querySelectorAll('.chip').forEach((chip) => {
+            chip.onclick = () => {
+                box.querySelectorAll('.chip').forEach((x) => x.classList.remove('active'));
+                chip.classList.add('active');
+                $('charInput').value = chars[Number(chip.dataset.i)].name;
+                $('buildBtn').disabled = false;
+            };
+        });
+        setStatus($('impStatus'), chars.length ? `找到 ${chars.length} 个角色` : '没找到，手动填名字吧', chars.length ? 'ok' : '');
+    } catch (err) {
+        setStatus($('impStatus'), '寻找失败：' + err.message, 'err');
+    } finally {
+        $('scanBtn').disabled = false;
+    }
+}
+
+async function buildPersona() {
+    const name = $('charInput').value.trim();
+    if (!importState.source || !name) return;
+
+    $('buildBtn').disabled = true;
+    setStatus($('impStatus'), `正在从原文抽取「${name}」…`);
+
+    try {
+        const card = await extractPersona(importState.source, name);
+        const all = (await idbGet(K.personas)) || {};
+        all[card.name] = card;
+        await idbSet(K.personas, all);
+
+        setStatus($('impStatus'), `已生成：${card.name}`, 'ok');
+        $('importDlg').close();
+        await renderPersonaList();
+        await openChat(card);
+    } catch (err) {
+        setStatus($('impStatus'), '生成失败：' + err.message, 'err');
+    } finally {
+        $('buildBtn').disabled = false;
+    }
+}
+
+/* =========================================================================
+ * 10. 事件绑定
+ * ========================================================================= */
+
+$('backBtn').onclick = closeChat;
+$('sendBtn').onclick = sendMessage;
+
+$('input').addEventListener('input', (e) => {
+    e.target.style.height = 'auto';
+    e.target.style.height = Math.min(e.target.scrollHeight, 110) + 'px';
+    updateSendBtn();
+});
+$('input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+
+/* 设置 */
+$('settingsBtn').onclick = () => {
+    $('cfgBase').value = cfg.base;
+    $('cfgKey').value = cfg.key;
+    $('cfgModel').value = cfg.model;
+    setStatus($('cfgStatus'), '');
+    $('settingsDlg').showModal();
+};
+$('cfgCancel').onclick = () => $('settingsDlg').close();
+$('cfgSave').onclick = async () => {
+    cfg = {
+        base: $('cfgBase').value.trim() || DEFAULT_CFG.base,
+        key: $('cfgKey').value.trim(),
+        model: $('cfgModel').value.trim() || DEFAULT_CFG.model,
+    };
+    await idbSet(K.cfg, cfg);
+    setStatus($('cfgStatus'), '已保存', 'ok');
+    setTimeout(() => $('settingsDlg').close(), 400);
+};
+
+/* 导入 */
+$('addBtn').onclick = () => {
+    importState = { source: null, chars: [] };
+    $('fileInput').value = '';
+    $('charInput').value = '';
+    $('charChips').innerHTML = '';
+    $('buildBtn').disabled = true;
+    setStatus($('impStatus'), '');
+    $('importDlg').showModal();
+};
+$('impCancel').onclick = () => $('importDlg').close();
+$('fileInput').onchange = (e) => handleFile(e.target.files[0]);
+$('scanBtn').onclick = scanCharacters;
+$('buildBtn').onclick = buildPersona;
+$('charInput').addEventListener('input', () => {
+    $('buildBtn').disabled = !importState.source || !$('charInput').value.trim();
+});
+
+/* 角色菜单 */
+$('moreBtn').onclick = async () => {
+    if (!state.persona) return;
+    $('moreName').textContent = state.persona.name;
+    $('moreDesc').textContent = state.persona.identity || '';
+    $('moreDlg').showModal();
+};
+$('moreCancel').onclick = () => $('moreDlg').close();
+
+$('clearMemBtn').onclick = async () => {
+    if (!state.persona) return;
+    if (!confirm('清除「' + state.persona.name + '」记住的关于你的事？')) return;
+    await saveMemories(state.persona.name, []);
+    $('moreDlg').close();
+};
+
+$('clearSessBtn').onclick = async () => {
+    if (!state.persona) return;
+    if (!confirm('清空和「' + state.persona.name + '」的聊天记录？记忆不受影响。')) return;
+    await saveSession(state.persona.name, []);
+    $('moreDlg').close();
+    closeChat();
+};
+
+$('delBtn').onclick = async () => {
+    if (!state.persona) return;
+    const name = state.persona.name;
+    if (!confirm('删除角色「' + name + '」？聊天记录和记忆会一起删掉。')) return;
+
+    const personas = (await idbGet(K.personas)) || {};
+    delete personas[name];
+    await idbSet(K.personas, personas);
+
+    const sessions = (await idbGet(K.sessions)) || {};
+    delete sessions[name];
+    await idbSet(K.sessions, sessions);
+
+    const mems = (await idbGet(K.memories)) || {};
+    delete mems[name];
+    await idbSet(K.memories, mems);
+
+    $('moreDlg').close();
+    closeChat();
+};
+
+/* =========================================================================
+ * 11. 启动
+ * ========================================================================= */
+
+(async function init() {
+    try {
+        const saved = await idbGet(K.cfg);
+        if (saved) cfg = { ...DEFAULT_CFG, ...saved };
+    } catch (e) { /* 首次运行没有配置 */ }
+
+    await renderPersonaList();
+
+    if (!cfg.key) {
+        $('cfgBase').value = cfg.base;
+        $('cfgModel').value = cfg.model;
+        setStatus($('cfgStatus'), '第一次用，先填 API Key', '');
+        $('settingsDlg').showModal();
+    }
+
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./sw.js').catch(() => {});
+    }
+})();
+</script>
+</body>
+</html>
