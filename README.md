@@ -188,7 +188,50 @@ netsh advfirewall firewall add rule name="character-chat" dir=in action=allow pr
 ```
 
 > 注意：监听 `0.0.0.0` 意味着**同一局域网内的设备都能访问**。在家用没问题，连公共 Wi-Fi 时留意一下。
+### 装到手机上（PWA）
+
+已经做成 PWA：手机上可以「添加到主屏幕」，有自己的图标、全屏运行、没有浏览器地址栏。
+
+- **Android（Chrome）**：打开地址 → 右上角菜单 → `添加到主屏幕` / `安装应用`
+- **iOS（Safari）**：打开地址 → 分享按钮 → `添加到主屏幕`
+
+启动时会自动缓存界面外壳，断网时点开也能看到界面（对话本身仍需要服务器在线）。
+
+> **HTTPS 说明**：Service Worker 只在 HTTPS 或 localhost 下生效。局域网 `http://192.168.x.x`
+> 能添加到主屏幕，但拿不到离线缓存；想要完整体验，得部署到 HTTPS（见下）。
+
+图片资源在 `web/icons/`，由 `scripts/make_icons.py` 生成，想换图改脚本重跑即可。
+### 部署到公网（想在哪儿都能用才需要）
+
+局域网只能在同一个 Wi-Fi 下用。要随时随地打开，把后端部署到有 HTTPS 的公网服务：
+
+1. **Render**（免费额度够用）：新建 `Web Service` → 连接本仓库 → Render 会自动识别 `Dockerfile`
+2. 在环境变量里填：`CHAT_API_KEY`、`EMBED_API_KEY`（可选）、`KNOWLEDGE_MODE=full`
+3. 部署完会得到一个 `https://xxx.onrender.com` 的地址，手机直接打开即可
+
+注意两点：
+
+- 免费实例**闲置一段时间会休眠**，第一次打开要等十几秒唤醒
+- 容器文件系统是临时的，**重启后上传的小说和生成的角色卡会丢**。要保留就得挂持久卷（Render 的 Disk，
+  或换成自己的服务器 + `-v`）
+
+仓库里带了 `Dockerfile` 和 `.dockerignore`。`.dockerignore` 特意排除了 `设定/` 和 `data/`，
+**避免把小说原文打进镜像**。
+
+也可以用阿里云/腾讯云自己买台小机器：
+
+```bash
+git clone <你的仓库>
+cd character-chat
+cp .env.example .env && nano .env     # 填 key
+docker build -t character-chat .
+docker run -d -p 80:8000 --env-file .env -v $(pwd)/data:/app/data character-chat
+```
+
+---
+
 ### 命令行方式
+
 
 ```bash
 # 入库（切块 + 向量化）

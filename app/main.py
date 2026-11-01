@@ -66,6 +66,31 @@ def index() -> FileResponse:
     return FileResponse(config.WEB_DIR / "index.html")
 
 
+# ---------------- PWA 静态资源 ----------------
+
+@app.get("/manifest.webmanifest")
+def manifest() -> FileResponse:
+    return FileResponse(
+        config.WEB_DIR / "manifest.webmanifest",
+        media_type="application/manifest+json",
+    )
+
+
+@app.get("/sw.js")
+def service_worker() -> FileResponse:
+    # Service Worker 必须在根路径下，作用域才能覆盖整站
+    return FileResponse(config.WEB_DIR / "sw.js", media_type="application/javascript")
+
+
+@app.get("/icons/{name}")
+def icon(name: str) -> FileResponse:
+    icons_dir = (config.WEB_DIR / "icons").resolve()
+    path = (icons_dir / name).resolve()
+    if path.parent != icons_dir or not path.exists():
+        raise HTTPException(404, "图标不存在")
+    return FileResponse(path, media_type="image/png")
+
+
 @app.get("/health")
 def health() -> dict:
     return {"ok": True, **indexing.stats()}

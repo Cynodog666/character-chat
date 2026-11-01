@@ -4,6 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>小说角色对话</title>
+<meta name="theme-color" content="#7c5cff">
+<meta name="description" content="上传小说，抽出角色卡，让书里的人用他的语气跟你聊天">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="角色对话">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
@@ -289,6 +297,7 @@
         <div class="m-name" id="mName">—</div>
         <div class="m-desc" id="mDesc"></div>
     </div>
+    <button data-act="server">服务器地址</button>
     <button data-act="clearMem">清除记忆</button>
     <button data-act="clearSess">清空聊天记录</button>
     <button data-act="delete" class="danger">删除角色</button>
@@ -296,7 +305,11 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const state = { source: '', chars: [], pick: null, persona: null, history: [], lastDay: '' };
+const state = {
+    source: '', chars: [], pick: null, persona: null, history: [], lastDay: '',
+    // 打包成 App 后没有同源后端，这里指向部署好的服务器；浏览器里留空走同源
+    apiBase: (localStorage.getItem('apiBase') || '').replace(/\/+$/, '')
+};
 
 function esc(s) {
     return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -304,7 +317,7 @@ function esc(s) {
 function setStatus(el, msg, kind = '') { el.textContent = msg; el.className = 'status ' + kind; }
 
 async function api(url, options) {
-    const res = await fetch(url, options);
+    const res = await fetch(state.apiBase + url, options);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
     return data;
@@ -339,16 +352,27 @@ $('menu').addEventListener('click', async e => {
     $('menu').classList.remove('open');
     const name = state.persona.name;
 
+    if (act === 'server') {
+        const cur = state.apiBase || location.origin;
+        const input = prompt('后端服务器地址（留空 = 用当前网页地址）\n例如：https://xxx.onrender.com', cur);
+        if (input === null) return;
+        const v = input.trim().replace(/\/+$/, '');
+        if (v && v !== location.origin) localStorage.setItem('apiBase', v);
+        else localStorage.removeItem('apiBase');
+        location.reload();
+        return;
+    }
+
     if (act === 'clearMem') {
         if (!confirm('清除「' + name + '」记住的关于你的事？')) return;
-        await fetch('/memory/' + encodeURIComponent(name), { method: 'DELETE' });
+        await fetch(state.apiBase + '/memory/' + encodeURIComponent(name), { method: 'DELETE' });
         alert('已清除记忆');
     } else if (act === 'clearSess') {
         if (!confirm('清空和「' + name + '」的聊天记录？记忆不受影响。')) return;
         await clearSession();
     } else if (act === 'delete') {
         if (!confirm('删除角色「' + name + '」？\n聊天记录和记忆会一起删掉。')) return;
-        await fetch('/persona/' + encodeURIComponent(name) + '?purge=true', { method: 'DELETE' });
+        await fetch(state.apiBase + '/persona/' + encodeURIComponent(name) + '?purge=true', { method: 'DELETE' });
         state.persona = null;
         document.body.classList.remove('chat-open');
         $('who').textContent = '未选择角色';
@@ -596,7 +620,7 @@ async function loadSession() {
 
 async function clearSession() {
     if (!state.persona) return;
-    await fetch('/session/' + encodeURIComponent(state.persona.name), { method: 'DELETE' });
+    await fetch(state.apiBase + '/session/' + encodeURIComponent(state.persona.name), { method: 'DELETE' });
     state.history = [];
     state.lastDay = '';
     $('chat').querySelectorAll('.row, .day').forEach(n => n.remove());
@@ -664,6 +688,11 @@ $('input').addEventListener('keydown', e => {
 
 /* ---------- 启动 ---------- */
 loadPersonas();
+
+/* 注册 Service Worker：装上主屏后断网也能打开界面。HTTP 局域网下浏览器会静默拒绝，忽略即可 */
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
 </script>
 </body>
 </html>

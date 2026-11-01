@@ -1,0 +1,22 @@
+.git
+.gitignore
+.env
+.env.example
+README.md
+
+# 小说原文与本地数据，绝不能进镜像
+设定/
+data/uploads/
+data/chroma/
+data/personas/
+data/memory/
+data/sessions/
+data/preview/
+data/samples/
+
+# 测试与缓存
+tests/
+__pycache__/
+*.pyc
+.venv/
+venv/
