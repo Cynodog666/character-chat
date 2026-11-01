@@ -178,6 +178,7 @@
     <div class="bar">
         <button class="icon-btn" id="backBtn" title="返回">‹</button>
         <span class="title" id="chatTitle">—</span>
+        <button class="icon-btn" id="speakBtn" title="朗读">🔇</button>
         <button class="icon-btn" id="moreBtn" title="更多">⋯</button>
     </div>
     <div class="chat" id="chat"></div>
@@ -300,6 +301,51 @@ let cfg = { ...DEFAULT_CFG };
 let state = { persona: null, history: [], lastDay: '' };
 // 待发送的图片：send 是发给模型的大图，thumb 是存本地/显示用的小图
 let pendingImage = null;
+
+// 朗读开关：记在本地，下次进来还是这个状态
+let speakEnabled = localStorage.getItem('speak') === '1';
+let zhVoice = null;
+
+function pickVoice() {
+    if (!('speechSynthesis' in window)) return null;
+    const voices = speechSynthesis.getVoices() || [];
+    return voices.find((v) => /zh[-_]CN|Chinese|普通话|中文/i.test(v.lang + v.name)) || null;
+}
+
+if ('speechSynthesis' in window) {
+    pickVoice();
+    speechSynthesis.onvoiceschanged = () => { zhVoice = pickVoice(); };
+}
+
+/** 把角色的话读出来。括号里的动作描述不读，读出来很怪 */
+function speak(text) {
+    if (!speakEnabled || !('speechSynthesis' in window)) return;
+    const clean = String(text || '')
+        .replace(/[（(【\[][^）)】\]]{1,20}[）)】\]]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!clean) return;
+
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(clean);
+    u.lang = 'zh-CN';
+    u.rate = 1.05;
+    u.pitch = 1.0;
+    if (!zhVoice) zhVoice = pickVoice();
+    if (zhVoice) u.voice = zhVoice;
+    speechSynthesis.speak(u);
+}
+
+function stopSpeaking() {
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+}
+
+function updateSpeakBtn() {
+    const btn = $('speakBtn');
+    if (!btn) return;
+    btn.textContent = speakEnabled ? '🔊' : '🔇';
+    btn.style.opacity = speakEnabled ? '1' : '0.45';
+}
 
 function esc(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -792,6 +838,7 @@ async function sendMessage() {
         const reply = await llm(messages, 0.85);
         pending.remove();
         renderAssistantText(reply);
+        speak(reply);
 
         state.history.push({ role: 'user', content: text || '（图片）', image: img ? img.thumb : null });
         state.history.push({ role: 'assistant', content: reply });
@@ -872,6 +919,14 @@ function renderRow(role, text, ts, image) {
         bubble.appendChild(span);
     }
 
+    if (role === 'assistant' && text && text !== '…') {
+        bubble.onclick = () => {
+            if (!speakEnabled) return;
+            stopSpeaking();
+            speak(text);
+        };
+    }
+
     row.appendChild(av);
     row.appendChild(bubble);
     chat.appendChild(row);
@@ -925,6 +980,7 @@ async function openChat(card) {
     $('listScreen').classList.add('hidden');
     $('chatScreen').classList.remove('hidden');
 
+    updateSpeakBtn();
     const history = await loadSession(card.name);
     state.history = history;
     if (history.length) {
@@ -940,6 +996,7 @@ async function openChat(card) {
 }
 
 function closeChat() {
+    stopSpeaking();
     $('chatScreen').classList.add('hidden');
     $('listScreen').classList.remove('hidden');
     state.persona = null;
@@ -1082,6 +1139,7 @@ async function buildPersona() {
         setStatus($('impStatus'), `已生成：${card.name}`, 'ok');
         $('importDlg').close();
         await renderPersonaList();
+    updateSpeakBtn();
         await openChat(card);
     } catch (err) {
         setStatus($('impStatus'), '生成失败：' + err.message, 'err');
@@ -1095,6 +1153,13 @@ async function buildPersona() {
  * ========================================================================= */
 
 $('backBtn').onclick = closeChat;
+
+$('speakBtn').onclick = () => {
+    speakEnabled = !speakEnabled;
+    localStorage.setItem('speak', speakEnabled ? '1' : '0');
+    updateSpeakBtn();
+    if (!speakEnabled) stopSpeaking();
+};
 $('sendBtn').onclick = sendMessage;
 
 $('input').addEventListener('input', (e) => {
