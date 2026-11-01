@@ -21,8 +21,42 @@ ALLOWED_SUFFIX = {".pdf", ".md", ".txt"}
 app = FastAPI(title="小说角色对话", version="0.1.0")
 
 
-def _lan_addresses() -> list[str]:
-    """列出本机局域网 IPv4，方便手机连同一个 Wi-Fi 访问。"""
+def _lan_addresses() -> list[tuple[str, str]]:
+    """列出本机可用的局域网 IPv4，返回 [(网卡名, 地址)]。
+
+    不能只用 socket.gethostbyname(gethostname())：装了 VPN / 虚拟网卡时，
+    它可能返回 10.x 之类的隧道地址，手机根本连不上（实测踩过）。
+    有 psutil 就枚举所有网卡，优先 Wi-Fi / 有线，排除虚拟网卡和 APIPA 地址；
+    没有就退回 socket 的粗结果。
+    """
+    virtual_kw = ("vmware", "virtualbox", "virtual", "loopback", "vethernet",
+                  "tap", "tun", "vpn", "hyper-v", "docker", "wsl")
+    preferred_kw = ("wlan", "wi-fi", "wifi", "无线", "以太网", "ethernet")
+
+    try:
+        import psutil  # 可选依赖，Anaconda 自带；没有就走下面的兜底
+    except ImportError:
+        psutil = None
+
+    if psutil is not None:
+        preferred: list[tuple[str, str]] = []
+        others: list[tuple[str, str]] = []
+        for name, addrs in psutil.net_if_addrs().items():
+            lowered = name.lower()
+            if any(k in lowered for k in virtual_kw):
+                continue
+            for addr in addrs:
+                if addr.family.name != "AF_INET":
+                    continue
+                ip = addr.address
+                if ip.startswith("127.") or ip.startswith("169.254."):
+                    continue
+                target = preferred if any(k in lowered for k in preferred_kw) else others
+                target.append((name, ip))
+        if preferred or others:
+            return preferred + others
+
+    # 兜底：只能拿到地址，没有网卡名
     found: set[str] = set()
     try:
         for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
@@ -30,7 +64,7 @@ def _lan_addresses() -> list[str]:
                 found.add(ip)
     except OSError:
         pass
-    return sorted(found)
+    return [("", ip) for ip in sorted(found)]
 
 
 @app.on_event("startup")
@@ -38,8 +72,10 @@ def _show_urls() -> None:
     port = config._str("PORT", "8000")
     print("")
     print(f"本机访问：http://127.0.0.1:{port}")
-    for ip in _lan_addresses():
-        print(f"手机访问：http://{ip}:{port}    （手机与电脑连同一个 Wi-Fi）")
+    for name, ip in _lan_addresses():
+        label = f"（{name}）" if name else ""
+        print(f"手机访问：http://{ip}:{port}  {label}")
+    print("（手机与电脑连同一个 Wi-Fi；有多个地址就逐个试）")
     print("")
 
 
