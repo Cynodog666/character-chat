@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -44,7 +44,14 @@
         width: 232px; background: var(--list); border-right: 1px solid var(--line);
         display: flex; flex-direction: column; flex-shrink: 0;
     }
-    .pane-head { padding: 16px 16px 10px; font-size: 13px; color: var(--sub); font-weight: 600; }
+    .pane-head {
+        padding: 16px 16px 10px; font-size: 13px; color: var(--sub); font-weight: 600;
+        display: flex; align-items: center; justify-content: space-between;
+    }
+    .add-mobile {
+        display: none; width: 28px; height: 28px; border-radius: 6px; border: none;
+        background: none; color: #555; font-size: 22px; line-height: 1; cursor: pointer;
+    }
     .persona-list { list-style: none; overflow-y: auto; flex: 1; }
     .persona-list li {
         display: flex; gap: 10px; align-items: center; padding: 10px 14px;
@@ -69,7 +76,12 @@
         align-items: center; justify-content: space-between;
         border-bottom: 1px solid var(--line); background: #f5f5f5;
     }
-    .bar .who { font-size: 15px; font-weight: 600; }
+    .bar .who { font-size: 15px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bar .back {
+        display: none; width: 32px; height: 32px; border: none; background: none;
+        cursor: pointer; font-size: 24px; line-height: 1; color: #333;
+        align-items: center; justify-content: center; margin-right: 2px;
+    }
     .bar .more {
         width: 32px; height: 32px; border: none; background: none; cursor: pointer;
         font-size: 20px; color: #666; border-radius: 6px; line-height: 1;
@@ -186,12 +198,21 @@
     .menu button:hover { background: #f2f2f2; }
     .menu button.danger { color: #d13b3b; }
 
+    /* ---------- 手机端：单栏切换 ---------- */
     @media (max-width: 760px) {
-        .rail { width: 50px; }
-        .list-pane { width: 140px; }
-        .drawer { left: 50px; width: calc(100vw - 50px); transform: translateX(calc(-100% - 52px)); }
-        .drawer.open { transform: translateX(0); }
+        .rail { display: none; }
+        .app { display: block; height: 100%; }
+        .list-pane { width: 100%; height: 100%; border-right: none; }
+        .chat-pane { display: none; width: 100%; height: 100%; }
+        body.chat-open .list-pane { display: none; }
+        body.chat-open .chat-pane { display: flex; }
+        .bar .back { display: flex; }
+        .add-mobile { display: block; }
+        .drawer { left: 0; width: 100vw; }
+        .menu { right: 10px; }
         .bubble { max-width: 78%; }
+        .chat { padding: 14px 14px 8px; }
+        .composer { padding: 8px 12px calc(10px + env(safe-area-inset-bottom)); }
     }
 </style>
 </head>
@@ -204,12 +225,13 @@
     </nav>
 
     <aside class="list-pane">
-        <div class="pane-head">角色</div>
+        <div class="pane-head"><span>角色</span><button class="add-mobile" id="addBtnM" title="新建角色">+</button></div>
         <ul class="persona-list" id="personaList"></ul>
     </aside>
 
     <main class="chat-pane">
         <div class="bar">
+            <button class="back" id="backBtn" title="返回">‹</button>
             <span class="who" id="who">未选择角色</span>
             <button class="more" id="moreBtn" title="更多">⋯</button>
         </div>
@@ -289,10 +311,14 @@ async function api(url, options) {
 }
 
 /* ---------- 抽屉 ---------- */
-$('addBtn').onclick = () => {
+function toggleDrawer() {
     const open = $('drawer').classList.toggle('open');
     $('addBtn').classList.toggle('active', open);
-};
+}
+$('addBtn').onclick = toggleDrawer;
+$('addBtnM').onclick = toggleDrawer;
+$('backBtn').onclick = () => document.body.classList.remove('chat-open');
+$('backBtn').onclick = () => document.body.classList.remove('chat-open');
 $('drawerClose').onclick = () => {
     $('drawer').classList.remove('open');
     $('addBtn').classList.remove('active');
@@ -324,6 +350,7 @@ $('menu').addEventListener('click', async e => {
         if (!confirm('删除角色「' + name + '」？\n聊天记录和记忆会一起删掉。')) return;
         await fetch('/persona/' + encodeURIComponent(name) + '?purge=true', { method: 'DELETE' });
         state.persona = null;
+        document.body.classList.remove('chat-open');
         $('who').textContent = '未选择角色';
         $('mName').textContent = '—';
         $('mDesc').textContent = '';

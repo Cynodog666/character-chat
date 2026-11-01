@@ -4,6 +4,7 @@
 """
 
 import shutil
+import socket
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -18,6 +19,28 @@ from .http import ApiError
 ALLOWED_SUFFIX = {".pdf", ".md", ".txt"}
 
 app = FastAPI(title="小说角色对话", version="0.1.0")
+
+
+def _lan_addresses() -> list[str]:
+    """列出本机局域网 IPv4，方便手机连同一个 Wi-Fi 访问。"""
+    found: set[str] = set()
+    try:
+        for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
+            if not ip.startswith("127.") and not ip.startswith("169.254."):
+                found.add(ip)
+    except OSError:
+        pass
+    return sorted(found)
+
+
+@app.on_event("startup")
+def _show_urls() -> None:
+    port = config._str("PORT", "8000")
+    print("")
+    print(f"本机访问：http://127.0.0.1:{port}")
+    for ip in _lan_addresses():
+        print(f"手机访问：http://{ip}:{port}    （手机与电脑连同一个 Wi-Fi）")
+    print("")
 
 
 class SourceBody(BaseModel):

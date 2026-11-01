@@ -52,14 +52,15 @@ if errorlevel 1 (
 )
 
 echo 服务启动中，3 秒后自动打开浏览器...
-echo 地址：http://127.0.0.1:8000
+echo 电脑访问：http://127.0.0.1:8000
+echo 手机访问：同一 Wi-Fi 下用下面终端里显示的局域网地址
 echo 停止服务：按 Ctrl + C
 echo.
 
 rem ---------- 3 秒后再开浏览器，避免页面先于服务加载 ----------
 start "" powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 3; Start-Process 'http://127.0.0.1:8000'"
 
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 echo.
 echo 服务已停止。
