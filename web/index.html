@@ -537,6 +537,8 @@ function markActive() {
 }
 
 function selectPersona(p) {
+    // 窄屏是单栏布局：进入聊天必须切到聊天页
+    document.body.classList.add('chat-open');
     state.persona = p;
     state.history = [];
     state.lastDay = '';
