@@ -226,8 +226,18 @@
             <button class="btn" id="clearMemBtn" style="width:100%">清除记忆</button>
             <button class="btn" id="clearSessBtn" style="width:100%">清空聊天记录</button>
             <button class="btn" id="delBtn" style="width:100%;color:#c0392b">删除角色</button>
-            <button class="btn" id="moreCancel" style="width:100%">关闭</button>
         </div>
+
+        <div class="field" style="margin-top:14px;margin-bottom:8px">
+            <label style="margin-bottom:8px">数据（全部角色通用）</label>
+            <div class="actions" style="margin-top:0">
+                <button class="btn" id="importBtn2">导入数据</button>
+                <button class="btn" id="exportBtn2">导出备份</button>
+            </div>
+        </div>
+
+        <button class="btn" id="moreCancel" style="width:100%;margin-top:6px">关闭</button>
+        <div class="status" id="moreStatus"></div>
     </div>
 </dialog>
 
@@ -1016,13 +1026,22 @@ $('cfgSave').onclick = async () => {
     setTimeout(() => $('settingsDlg').close(), 400);
 };
 
-/* 数据迁移 */
-$('importBtn').onclick = () => $('importFile').click();
+/* 数据迁移：设置页和 ⋯ 菜单共用同一套逻辑，状态显示在触发它的那个弹层里 */
+let importStatusId = 'cfgStatus';
+const importStatus = () => $(importStatusId);
+
+$('importBtn').onclick = () => triggerImport('cfgStatus');
+$('importBtn2').onclick = () => triggerImport('moreStatus');
+
+function triggerImport(statusId) {
+    importStatusId = statusId;
+    $('importFile').click();
+}
 
 $('importFile').onchange = async (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
-    setStatus($('cfgStatus'), '正在导入…');
+    setStatus(importStatus(), '正在导入…');
     try {
         const text = await readFile(file);
         const data = JSON.parse(text);
@@ -1041,16 +1060,22 @@ $('importFile').onchange = async (e) => {
         await renderPersonaList();
 
         const n = Object.keys(data.personas || {}).length;
-        setStatus($('cfgStatus'),
+        setStatus(importStatus(),
             `已导入 ${n} 个角色、${Object.keys(data.sessions || {}).length} 份聊天记录、` +
             `${Object.keys(data.memories || {}).length} 份记忆。小说还要自己传一次才能检索剧情。`, 'ok');
     } catch (err) {
-        setStatus($('cfgStatus'), '导入失败：' + err.message, 'err');
+        setStatus(importStatus(), '导入失败：' + err.message, 'err');
     }
     e.target.value = '';
 };
 
-$('exportBtn').onclick = async () => {
+$('exportBtn').onclick = () => doExport('cfgStatus');
+$('exportBtn2').onclick = () => {
+    $('moreDlg').close();
+    doExport('cfgStatus');
+};
+
+async function doExport(statusId) {
     const payload = {
         version: 1,
         exportedAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
@@ -1065,8 +1090,8 @@ $('exportBtn').onclick = async () => {
     a.download = 'export-lite.json';
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 3000);
-    setStatus($('cfgStatus'), '已导出，文件在下载目录里', 'ok');
-};
+    setStatus($(statusId || importStatusId), '已导出，文件在下载目录里', 'ok');
+}
 
 /* 导入 */
 $('addBtn').onclick = () => {
