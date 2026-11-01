@@ -1,0 +1,31 @@
+# ---------- 密钥 ----------
+.env
+.env.local
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# ---------- 本地数据 ----------
+# 小说原文、向量库、角色卡、聊天记录、长期记忆
+# 角色卡里有原文对白摘录，聊天记录和记忆里有私人对话，都不能进公开仓库
+设定/
+data/uploads/
+data/chroma/
+data/personas/
+data/memory/
+data/sessions/
+data/preview/
+
+# ---------- 测试与临时 ----------
+tests/_tmp/
+
+# ---------- 其它 ----------
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

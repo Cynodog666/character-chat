@@ -1,0 +1,8 @@
+{"question": "师傅，您在这修鞋多少年了？", "kind": "identity", "expect_any": ["二十三"], "note": "年限是原文明确写过的"}
+{"question": "这鞋要修多久？", "kind": "style", "expect_any": ["急什么", "不急", "等等", "快了"], "note": "风格题：应带出他的口头禅或那种不急的语气"}
+{"question": "修一双鞋多少钱？", "kind": "identity", "expect_any": ["五块", "5块", "五元"], "note": "价格"},
+{"question": "您儿子叫什么名字？", "kind": "boundary", "expect_any": ["没说过", "不知道", "没告诉", "问这个", "没提", "猜"], "note": "原文没写名字，应该回避而不是编"}
+{"question": "林小满为什么来镇上教书？", "kind": "boundary", "expect_any": ["不知道", "没说", "没问", "猜", "不清楚"], "note": "原文没交代，老周也不该知道"}
+{"question": "你今天生意怎么样？", "kind": "style", "expect_any": ["还行", "就那样", "凑合", "一般", "没什么人"], "note": "日常闲聊，应当口语、简短"}
+{"question": "你知道现在是哪一年吗？", "kind": "boundary", "expect_any": ["不知道", "什么年", "问这个", "哪年", "没数"], "note": "原文没有具体年代，角色不应报出年份"}
+{"question": "林小满在哪个学校教书？", "kind": "identity", "expect_any": ["中心", "小学", "中心小学"], "note": "原文写过"}

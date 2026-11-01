@@ -1,0 +1,642 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>小说角色对话</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+        --rail: #ededed;
+        --list: #f7f7f7;
+        --chatbg: #f5f5f5;
+        --line: #e3e3e3;
+        --text: #191919;
+        --sub: #999;
+        --accent: #07c160;
+        --self: #95ec69;
+    }
+    html, body { height: 100%; }
+    body {
+        font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        background: var(--chatbg); color: var(--text);
+        height: 100vh; height: 100dvh; overflow: hidden; font-size: 14px;
+    }
+
+    .app { display: flex; height: 100%; }
+
+    /* ---------- 最左：导航条 ---------- */
+    .rail {
+        width: 58px; background: var(--rail); border-right: 1px solid var(--line);
+        display: flex; flex-direction: column; align-items: center;
+        padding: 18px 0; gap: 10px; flex-shrink: 0;
+    }
+    .rail-btn {
+        width: 36px; height: 36px; border-radius: 8px; border: none; cursor: pointer;
+        background: transparent; color: #555; font-size: 22px; line-height: 1;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .rail-btn:hover { background: rgba(0,0,0,.06); }
+    .rail-btn.active { background: rgba(7,193,96,.12); color: var(--accent); }
+
+    /* ---------- 中间：角色列表 ---------- */
+    .list-pane {
+        width: 232px; background: var(--list); border-right: 1px solid var(--line);
+        display: flex; flex-direction: column; flex-shrink: 0;
+    }
+    .pane-head { padding: 16px 16px 10px; font-size: 13px; color: var(--sub); font-weight: 600; }
+    .persona-list { list-style: none; overflow-y: auto; flex: 1; }
+    .persona-list li {
+        display: flex; gap: 10px; align-items: center; padding: 10px 14px;
+        cursor: pointer; border-radius: 6px; margin: 0 8px 2px;
+    }
+    .persona-list li:hover { background: #e9e9e9; }
+    .persona-list li.active { background: #dcdcdc; }
+    .avatar-sq {
+        width: 38px; height: 38px; border-radius: 6px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        color: #fff; font-weight: 700; font-size: 16px; background: #7c5cff;
+    }
+    .p-meta { min-width: 0; display: block; }
+    .p-name { display: block; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .p-desc { display: block; font-size: 12px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .empty-tip { padding: 20px 16px; font-size: 12.5px; color: var(--sub); line-height: 1.9; }
+
+    /* ---------- 右：聊天 ---------- */
+    .chat-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--chatbg); }
+    .bar {
+        height: 54px; flex-shrink: 0; padding: 0 18px; display: flex;
+        align-items: center; justify-content: space-between;
+        border-bottom: 1px solid var(--line); background: #f5f5f5;
+    }
+    .bar .who { font-size: 15px; font-weight: 600; }
+    .bar .more {
+        width: 32px; height: 32px; border: none; background: none; cursor: pointer;
+        font-size: 20px; color: #666; border-radius: 6px; line-height: 1;
+    }
+    .bar .more:hover { background: rgba(0,0,0,.06); }
+
+    .chat {
+        flex: 1; overflow-y: auto; padding: 18px 22px 8px;
+        display: flex; flex-direction: column; gap: 14px;
+    }
+    .day { text-align: center; font-size: 12px; color: #b2b2b2; margin: 4px 0; }
+    .row { display: flex; gap: 10px; align-items: flex-start; }
+    .row.me { flex-direction: row-reverse; }
+    .row .avatar-sq { width: 36px; height: 36px; font-size: 15px; }
+    .row.me .avatar-sq { background: #b0b0b0; }
+    .bubble {
+        /* 用 px 上限而不是纯百分比：屏幕再宽，一行也不会拉到几百字 */
+        max-width: min(62%, 480px); padding: 9px 13px; border-radius: 6px; line-height: 1.72;
+        background: #fff; position: relative; white-space: pre-wrap; word-break: break-word;
+        font-size: 14.5px;
+    }
+    .row.me .bubble { background: var(--self); }
+    .placeholder { text-align: center; color: #b2b2b2; font-size: 13px; margin: auto; line-height: 2; }
+
+    .composer {
+        flex-shrink: 0; border-top: 1px solid var(--line); background: #f5f5f5;
+        padding: 10px 18px calc(12px + env(safe-area-inset-bottom));
+    }
+    .row2 { display: flex; gap: 10px; align-items: flex-end; }
+    #input {
+        flex: 1; min-height: 62px; max-height: 120px; resize: none; outline: none;
+        border: none; background: #fff; border-radius: 6px; padding: 10px 12px;
+        font-size: 14.5px; font-family: inherit; line-height: 1.6;
+    }
+    #send {
+        border: none; background: #e7e7e7; color: #9a9a9a; padding: 8px 18px;
+        border-radius: 5px; font-size: 14px; cursor: not-allowed; flex-shrink: 0;
+        height: 34px;
+    }
+    #send.on { background: var(--accent); color: #fff; cursor: pointer; }
+
+    /* ---------- 左侧抽屉：新建角色 ---------- */
+    .drawer {
+        position: fixed; left: 58px; top: 0; bottom: 0; width: 320px; background: #fff;
+        border-right: 1px solid var(--line); box-shadow: 2px 0 14px rgba(0,0,0,.08);
+        /* 按「自身宽度 + 左边偏移」整块推出屏幕外，否则会露出右边一条 */
+        transform: translateX(calc(-100% - 60px));
+        visibility: hidden;
+        transition: transform .18s ease, visibility .18s;
+        display: flex; flex-direction: column; z-index: 20;
+    }
+    .drawer.open { transform: translateX(0); visibility: visible; }
+    .drawer-head {
+        padding: 16px 18px 12px; font-size: 15px; font-weight: 600;
+        display: flex; justify-content: space-between; align-items: center;
+        border-bottom: 1px solid var(--line);
+    }
+    .drawer-head button { border: none; background: none; font-size: 20px; color: #999; cursor: pointer; line-height: 1; }
+    .drawer-body { padding: 14px 18px 22px; overflow-y: auto; }
+    .step { margin-bottom: 20px; }
+    .step h4 { font-size: 12px; color: var(--sub); font-weight: 600; margin-bottom: 8px; letter-spacing: .3px; }
+    .drop {
+        border: 1.5px dashed #d5d5d5; border-radius: 6px; padding: 16px 12px;
+        text-align: center; font-size: 12.5px; color: var(--sub); cursor: pointer;
+    }
+    .drop:hover, .drop.over { border-color: var(--accent); background: #f2fbf6; color: var(--accent); }
+    .drop strong { color: var(--text); }
+    .btn {
+        width: 100%; padding: 9px 12px; font-size: 13.5px; border-radius: 5px;
+        border: 1px solid #ddd; background: #f7f7f7; color: #444; cursor: pointer;
+    }
+    .btn:hover:not(:disabled) { background: #efefef; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn.primary:hover:not(:disabled) { background: #06ad56; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .chip {
+        padding: 5px 10px; border-radius: 14px; border: 1px solid #e2e2e2; background: #fafafa;
+        font-size: 12.5px; color: #555; cursor: pointer;
+    }
+    .chip:hover { border-color: #c9c9c9; }
+    .chip.active { background: #e8faf0; border-color: var(--accent); color: #0a8f45; }
+    .range { display: flex; align-items: center; gap: 6px; }
+    .range input {
+        flex: 1; min-width: 0; padding: 7px 9px; font-size: 13px;
+        border: 1px solid #ddd; border-radius: 5px; outline: none;
+    }
+    .range input:focus { border-color: var(--accent); }
+    .range span { color: var(--sub); font-size: 12px; }
+    .status { font-size: 12px; color: var(--sub); margin-top: 6px; line-height: 1.6; }
+    .status.err { color: #c0392b; }
+    .status.ok { color: #0a8f45; }
+
+    /* ---------- 右上角二级菜单 ---------- */
+    .menu {
+        position: fixed; top: 50px; right: 18px; width: 216px; background: #fff;
+        border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.12);
+        padding: 4px; display: none; z-index: 30;
+    }
+    .menu.open { display: block; }
+    .menu-head {
+        padding: 10px 12px 11px; border-bottom: 1px solid #f0f0f0; margin-bottom: 4px;
+    }
+    .m-name { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+    .m-desc {
+        font-size: 12px; color: var(--sub); line-height: 1.6;
+        display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+    .menu button {
+        display: block; width: 100%; text-align: left; border: none; background: none;
+        padding: 9px 12px; font-size: 13.5px; color: #333; border-radius: 4px; cursor: pointer;
+    }
+    .menu button:hover { background: #f2f2f2; }
+    .menu button.danger { color: #d13b3b; }
+
+    @media (max-width: 760px) {
+        .rail { width: 50px; }
+        .list-pane { width: 140px; }
+        .drawer { left: 50px; width: calc(100vw - 50px); transform: translateX(calc(-100% - 52px)); }
+        .drawer.open { transform: translateX(0); }
+        .bubble { max-width: 78%; }
+    }
+</style>
+</head>
+<body>
+
+<div class="app">
+    <nav class="rail">
+        <button class="rail-btn" id="addBtn" title="新建角色">+</button>
+        <button class="rail-btn" id="listBtn" title="角色">☰</button>
+    </nav>
+
+    <aside class="list-pane">
+        <div class="pane-head">角色</div>
+        <ul class="persona-list" id="personaList"></ul>
+    </aside>
+
+    <main class="chat-pane">
+        <div class="bar">
+            <span class="who" id="who">未选择角色</span>
+            <button class="more" id="moreBtn" title="更多">⋯</button>
+        </div>
+        <div class="chat" id="chat">
+            <div class="placeholder" id="placeholder">
+                从左边选一个角色，或者点左上角 + 新建<br>
+                <span style="font-size:12px">上传小说 → 分析角色 → 生成角色卡</span>
+            </div>
+        </div>
+        <div class="composer">
+            <div class="row2">
+                <textarea id="input" placeholder="说点什么…" disabled></textarea>
+                <button id="send" disabled>发送</button>
+            </div>
+        </div>
+    </main>
+</div>
+
+<div class="drawer" id="drawer">
+    <div class="drawer-head">
+        <span>新建角色</span>
+        <button id="drawerClose">×</button>
+    </div>
+    <div class="drawer-body">
+        <div class="step">
+            <h4>1 · 上传小说</h4>
+            <div class="drop" id="drop">拖入 <strong>.txt / .md / .pdf</strong><br><span style="font-size:11.5px">或点击选择</span></div>
+            <input type="file" id="file" accept=".txt,.md,.pdf" hidden>
+            <div class="status" id="upStatus"></div>
+        </div>
+
+        <div class="step">
+            <h4>2 · 分析角色</h4>
+            <button class="btn" id="scanBtn" disabled>读取全文，列出角色</button>
+            <div class="chips" id="charChips"></div>
+            <div class="status" id="charStatus"></div>
+        </div>
+
+        <div class="step">
+            <h4>3 · 生成角色卡</h4>
+            <div class="range">
+                <input type="number" id="chFrom" placeholder="起始章" min="1">
+                <span>—</span>
+                <input type="number" id="chTo" placeholder="结束章" min="1">
+            </div>
+            <div class="status" id="chHint">留空 = 全书</div>
+            <button class="btn primary" id="buildBtn" disabled style="margin-top:8px">生成角色卡</button>
+            <div class="status" id="buildStatus"></div>
+        </div>
+    </div>
+</div>
+
+<div class="menu" id="menu">
+    <div class="menu-head">
+        <div class="m-name" id="mName">—</div>
+        <div class="m-desc" id="mDesc"></div>
+    </div>
+    <button data-act="clearMem">清除记忆</button>
+    <button data-act="clearSess">清空聊天记录</button>
+    <button data-act="delete" class="danger">删除角色</button>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const state = { source: '', chars: [], pick: null, persona: null, history: [], lastDay: '' };
+
+function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function setStatus(el, msg, kind = '') { el.textContent = msg; el.className = 'status ' + kind; }
+
+async function api(url, options) {
+    const res = await fetch(url, options);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+    return data;
+}
+
+/* ---------- 抽屉 ---------- */
+$('addBtn').onclick = () => {
+    const open = $('drawer').classList.toggle('open');
+    $('addBtn').classList.toggle('active', open);
+};
+$('drawerClose').onclick = () => {
+    $('drawer').classList.remove('open');
+    $('addBtn').classList.remove('active');
+};
+$('listBtn').onclick = () => {
+    $('drawer').classList.remove('open');
+    $('addBtn').classList.remove('active');
+};
+
+/* ---------- 菜单 ---------- */
+$('moreBtn').onclick = e => { e.stopPropagation(); $('menu').classList.toggle('open'); };
+document.addEventListener('click', () => $('menu').classList.remove('open'));
+$('menu').onclick = e => e.stopPropagation();
+
+$('menu').addEventListener('click', async e => {
+    const act = e.target.dataset.act;
+    if (!act || !state.persona) return;
+    $('menu').classList.remove('open');
+    const name = state.persona.name;
+
+    if (act === 'clearMem') {
+        if (!confirm('清除「' + name + '」记住的关于你的事？')) return;
+        await fetch('/memory/' + encodeURIComponent(name), { method: 'DELETE' });
+        alert('已清除记忆');
+    } else if (act === 'clearSess') {
+        if (!confirm('清空和「' + name + '」的聊天记录？记忆不受影响。')) return;
+        await clearSession();
+    } else if (act === 'delete') {
+        if (!confirm('删除角色「' + name + '」？\n聊天记录和记忆会一起删掉。')) return;
+        await fetch('/persona/' + encodeURIComponent(name) + '?purge=true', { method: 'DELETE' });
+        state.persona = null;
+        $('who').textContent = '未选择角色';
+        $('mName').textContent = '—';
+        $('mDesc').textContent = '';
+        $('chat').innerHTML = '<div class="placeholder">角色已删除</div>';
+        $('input').disabled = true;
+        $('input').value = '';
+        updateSendState();
+        loadPersonas();
+    }
+});
+
+/* ---------- 上传 ---------- */
+const drop = $('drop'), fileInput = $('file');
+drop.onclick = () => fileInput.click();
+fileInput.onchange = () => upload(fileInput.files[0]);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); upload(e.dataTransfer.files[0]); };
+
+async function upload(file) {
+    if (!file) return;
+    setStatus($('upStatus'), '上传并切块中…');
+    const form = new FormData();
+    form.append('file', file);
+    try {
+        const data = await api('/upload', { method: 'POST', body: form });
+        state.source = data.source;
+        setStatus($('upStatus'), data.source + '：' + data.chunks + ' 块，' + data.text_chars + ' 字', 'ok');
+        $('scanBtn').disabled = false;
+        state.chars = [];
+        renderChars();
+        loadChapters();
+    } catch (err) {
+        setStatus($('upStatus'), '失败：' + err.message, 'err');
+    }
+}
+
+/* ---------- 分析角色 ---------- */
+$('scanBtn').onclick = async () => {
+    setStatus($('charStatus'), '正在读全文找角色…');
+    $('scanBtn').disabled = true;
+    try {
+        const data = await api('/characters', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source: state.source })
+        });
+        state.chars = data.characters || [];
+        renderChars();
+        setStatus($('charStatus'), state.chars.length ? '找到 ' + state.chars.length + ' 个角色' : '没找到角色', 'ok');
+    } catch (err) {
+        setStatus($('charStatus'), '失败：' + err.message, 'err');
+    } finally {
+        $('scanBtn').disabled = false;
+    }
+};
+
+function renderChars() {
+    const box = $('charChips');
+    if (!state.chars.length) { box.innerHTML = ''; return; }
+    box.innerHTML = state.chars.map((c, i) =>
+        '<span class="chip" data-i="' + i + '" title="' + esc(c.one_line || '') + '">' + esc(c.name) + '</span>'
+    ).join('');
+    box.querySelectorAll('.chip').forEach(chip => {
+        chip.onclick = () => {
+            state.pick = state.chars[Number(chip.dataset.i)];
+            box.querySelectorAll('.chip').forEach(x => x.classList.remove('active'));
+            chip.classList.add('active');
+            $('buildBtn').disabled = false;
+            setStatus($('charStatus'), '已选：' + state.pick.name);
+        };
+    });
+}
+
+/* ---------- 章节范围 ---------- */
+async function loadChapters() {
+    if (!state.source) return;
+    try {
+        const data = await api('/chapters?source=' + encodeURIComponent(state.source));
+        $('chHint').textContent = '共 ' + data.count + ' 章。留空 = 全书，跨度大的角色建议指定';
+        $('chTo').max = data.count;
+        $('chFrom').max = data.count;
+    } catch { /* 忽略 */ }
+}
+
+/* ---------- 生成角色卡 ---------- */
+$('buildBtn').onclick = async () => {
+    if (!state.pick) return;
+    const from = Number($('chFrom').value) || null;
+    const to = Number($('chTo').value) || null;
+    const scope = (from || to) ? '（第 ' + (from || 1) + '–' + (to || '末') + ' 章）' : '（全书）';
+
+    setStatus($('buildStatus'), '正在抽取「' + state.pick.name + '」' + scope + '…');
+    $('buildBtn').disabled = true;
+    try {
+        const body = { source: state.source, name: state.pick.name };
+        if (from) body.chapter_from = from;
+        if (to) body.chapter_to = to;
+
+        const persona = await api('/persona', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+
+        let msg = '已生成：' + persona.name;
+        if (persona.resolved_conflicts && persona.resolved_conflicts.length) {
+            msg += '（删掉 ' + persona.resolved_conflicts.length + ' 条矛盾的"不知道"）';
+        }
+        setStatus($('buildStatus'), msg, 'ok');
+        await loadPersonas();
+        selectPersona(persona);
+        $('drawer').classList.remove('open');
+        $('addBtn').classList.remove('active');
+    } catch (err) {
+        setStatus($('buildStatus'), '失败：' + err.message, 'err');
+    } finally {
+        $('buildBtn').disabled = false;
+    }
+};
+
+/* ---------- 角色列表 ---------- */
+async function loadPersonas() {
+    try {
+        const items = await api('/personas');
+        const list = $('personaList');
+        if (!items.length) {
+            list.innerHTML = '<li class="empty-tip" style="cursor:default">还没有角色<br>点左上角 + 新建</li>';
+            return;
+        }
+        list.innerHTML = items.map(p =>
+            '<li data-name="' + esc(p.name) + '">' +
+                '<span class="avatar-sq">' + esc(p.name.slice(0, 1)) + '</span>' +
+                '<span class="p-meta">' +
+                    '<span class="p-name">' + esc(p.name) + '</span>' +
+                    '<span class="p-desc">' + esc(p.identity || '') + '</span>' +
+                '</span>' +
+            '</li>'
+        ).join('');
+        list.querySelectorAll('li[data-name]').forEach(li => {
+            li.onclick = async () => {
+                try {
+                    const p = await api('/persona/' + encodeURIComponent(li.dataset.name));
+                    selectPersona(p);
+                } catch (err) {
+                    alert('读取角色失败：' + err.message);
+                }
+            };
+        });
+        markActive();
+    } catch (err) {
+        $('personaList').innerHTML = '<li class="empty-tip">读取失败：' + esc(err.message) + '</li>';
+    }
+}
+
+function markActive() {
+    document.querySelectorAll('#personaList li[data-name]').forEach(li => {
+        li.classList.toggle('active', !!state.persona && li.dataset.name === state.persona.name);
+    });
+}
+
+function selectPersona(p) {
+    state.persona = p;
+    state.history = [];
+    state.lastDay = '';
+    $('who').textContent = p.name;
+    $('mName').textContent = p.name;
+    $('mDesc').textContent = p.identity || '';
+    $('placeholder').style.display = 'none';
+    $('input').disabled = false;
+    updateSendState();
+    loadSession();
+    markActive();
+    $('input').focus();
+}
+
+/* ---------- 会话恢复 ---------- */
+function dayLabel(ts) {
+    if (!ts) return '';
+    const d = ts.slice(0, 10);
+    const now = new Date();
+    const today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    return d === today ? '今天' : d;
+}
+
+function renderMsg(role, text, ts) {
+    const chat = $('chat');
+    if (ts) {
+        const day = dayLabel(ts);
+        if (state.lastDay !== day) {
+            const sep = document.createElement('div');
+            sep.className = 'day';
+            sep.textContent = day;
+            chat.appendChild(sep);
+            state.lastDay = day;
+        }
+    }
+    const row = document.createElement('div');
+    row.className = 'row' + (role === 'user' ? ' me' : '');
+    const av = document.createElement('span');
+    av.className = 'avatar-sq';
+    av.textContent = role === 'user' ? '我' : (state.persona ? state.persona.name.slice(0, 1) : '?');
+    const b = document.createElement('div');
+    b.className = 'bubble';
+    b.textContent = text;
+    row.appendChild(av);
+    row.appendChild(b);
+    chat.appendChild(row);
+    chat.scrollTop = chat.scrollHeight;
+}
+
+/* 助手回复按行拆成多条消息，像真的在发微信 */
+function renderAssistantText(text, ts) {
+    const lines = String(text || '').split('\n').map(s => s.trim()).filter(Boolean);
+    const list = (lines.length ? lines : ['…']).slice(0, 8);
+    list.forEach((line, i) => renderMsg('assistant', line, i === 0 ? ts : ''));
+}
+
+async function loadSession() {
+    if (!state.persona) return;
+    $('chat').querySelectorAll('.row, .day').forEach(n => n.remove());
+    state.history = [];
+    state.lastDay = '';
+
+    try {
+        const data = await api('/session/' + encodeURIComponent(state.persona.name));
+        if (!data.count) {
+            renderMsg('assistant', '（' + state.persona.name + '抬起头看了你一眼）');
+            return;
+        }
+        data.messages.forEach(m => {
+            if (m.role === 'assistant') {
+                renderAssistantText(m.content, m.ts);
+            } else {
+                renderMsg('user', m.content, m.ts);
+            }
+            state.history.push({ role: m.role, content: m.content });
+        });
+    } catch (err) {
+        renderMsg('assistant', '（读取聊天记录失败：' + err.message + '）');
+    }
+}
+
+async function clearSession() {
+    if (!state.persona) return;
+    await fetch('/session/' + encodeURIComponent(state.persona.name), { method: 'DELETE' });
+    state.history = [];
+    state.lastDay = '';
+    $('chat').querySelectorAll('.row, .day').forEach(n => n.remove());
+    $('placeholder').style.display = 'none';
+    renderMsg('assistant', '（' + state.persona.name + '抬起头看了你一眼）');
+}
+
+/* ---------- 发消息 ---------- */
+function updateSendState() {
+    const has = $('input').value.trim().length > 0 && !!state.persona;
+    $('send').disabled = !has;
+    $('send').classList.toggle('on', has);
+}
+
+async function send() {
+    const text = $('input').value.trim();
+    if (!text || !state.persona) return;
+    const name = state.persona.name;
+
+    $('input').value = '';
+    $('input').style.height = 'auto';
+    updateSendState();
+    renderMsg('user', text);
+
+    const row = document.createElement('div');
+    row.className = 'row';
+    const av = document.createElement('span');
+    av.className = 'avatar-sq';
+    av.textContent = name.slice(0, 1);
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = '…';
+    row.appendChild(av);
+    row.appendChild(bubble);
+    $('chat').appendChild(row);
+    $('chat').scrollTop = $('chat').scrollHeight;
+
+    try {
+        const data = await api('/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, message: text })
+        });
+        row.remove();
+        renderAssistantText(data.reply);
+    } catch (err) {
+        row.remove();
+        renderMsg('assistant', '（出错了：' + err.message + '）');
+    } finally {
+        $('chat').scrollTop = $('chat').scrollHeight;
+        updateSendState();
+        $('input').focus();
+    }
+}
+
+$('send').onclick = send;
+$('input').addEventListener('input', e => {
+    e.target.style.height = 'auto';
+    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+    updateSendState();
+});
+$('input').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+/* ---------- 启动 ---------- */
+loadPersonas();
+</script>
+</body>
+</html>
