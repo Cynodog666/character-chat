@@ -755,6 +755,8 @@ async function sendMessage() {
     const text = input.value.trim();
     if ((!text && !pendingImage) || !state.persona) return;
 
+    if (!cfg.key) return openSettings('先填 API Key，才能发消息');
+
     const name = state.persona.name;
     const img = pendingImage;
     input.value = '';
@@ -1105,13 +1107,15 @@ $('input').addEventListener('keydown', (e) => {
 });
 
 /* 设置 */
-$('settingsBtn').onclick = () => {
+function openSettings(tip) {
     $('cfgBase').value = cfg.base;
     $('cfgKey').value = cfg.key;
     $('cfgModel').value = cfg.model;
-    setStatus($('cfgStatus'), '');
-    $('settingsDlg').showModal();
-};
+    setStatus($('cfgStatus'), tip || '', tip ? 'err' : '');
+    if (!$('settingsDlg').open) $('settingsDlg').showModal();
+}
+
+$('settingsBtn').onclick = () => openSettings();
 $('cfgCancel').onclick = () => $('settingsDlg').close();
 $('cfgSave').onclick = async () => {
     cfg = {
@@ -1244,7 +1248,10 @@ $('charInput').addEventListener('input', () => {
 });
 
 /* 发图片 */
-$('imgBtn').onclick = () => $('imgFile').click();
+$('imgBtn').onclick = () => {
+    if (!cfg.key) return openSettings('先填 API Key，才能发消息和图片');
+    $('imgFile').click();
+};
 
 $('imgFile').onchange = async (e) => {
     const file = e.target.files && e.target.files[0];
@@ -1331,10 +1338,7 @@ $('delBtn').onclick = async () => {
     await renderPersonaList();
 
     if (!cfg.key) {
-        $('cfgBase').value = cfg.base;
-        $('cfgModel').value = cfg.model;
-        setStatus($('cfgStatus'), '第一次用，先填 API Key', '');
-        $('settingsDlg').showModal();
+        openSettings('第一次用，先填 API Key');
     }
 
     if ('serviceWorker' in navigator) {
