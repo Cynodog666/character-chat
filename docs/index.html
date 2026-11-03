@@ -745,17 +745,27 @@ function buildSystemPrompt(card, memories, facts) {
 4. 口语，标点随意，可以用「……」「嗯」「啊」「行」这些。
 5. 全程第一人称，只说这个人会说的话。
 6. 不许提「小说」「设定」「角色扮演」「AI」「模型」这些词。
-7. 真有不知道的，就用这个人的方式说不知道。`);
+7. 真有不知道的，就用这个人的方式说不知道。
+8. 你和对方是**在网上认识的，隔着屏幕，不在一个地方**。你看不见他那边的天气、路人、屋子，
+   也**不可能派人过去、不可能说走就走到他跟前**。关心要落在话上——让他躲雨、让他按时吃饭、
+   让他别逞强——但不要说「我给你送过去」「你过来找我」「回来吃饭」这种必须见面才能兑现的话。`);
 
     return L.join('\n');
 }
 
+let sending = false;
+
 async function sendMessage() {
+    if (sending) return;
+
     const input = $('input');
     const text = input.value.trim();
     if ((!text && !pendingImage) || !state.persona) return;
 
     if (!cfg.key) return openSettings('先填 API Key，才能发消息');
+
+    sending = true;
+    updateSendBtn();
 
     const name = state.persona.name;
     const img = pendingImage;
@@ -791,7 +801,7 @@ async function sendMessage() {
 
         const reply = await llm(messages, 0.85);
         pending.remove();
-        renderAssistantText(reply);
+        await renderAssistantText(reply, undefined, true);
 
         state.history.push({ role: 'user', content: text || '（图片）', image: img ? img.thumb : null });
         state.history.push({ role: 'assistant', content: reply });
@@ -806,6 +816,7 @@ async function sendMessage() {
         }
         renderRow('assistant', '（出错了：' + msg + '）');
     } finally {
+        sending = false;
         updateSendBtn();
     }
 }
@@ -880,10 +891,23 @@ function renderRow(role, text, ts, image) {
 }
 
 /** 助手回复按行拆成多条消息，像真的在发微信 */
-function renderAssistantText(text, ts) {
+function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 助手回复按行拆成多条消息，一条一条冒出来，像真的在发微信。
+ *  animate=true 时逐条出现（实时对话）；恢复历史时不加延迟。 */
+async function renderAssistantText(text, ts, animate) {
     const lines = String(text || '').split('\n').map((s) => s.trim()).filter(Boolean);
     const list = (lines.length ? lines : ['…']).slice(0, 8);
-    list.forEach((line, i) => renderRow('assistant', line, i === 0 ? ts : undefined));
+
+    for (let i = 0; i < list.length; i++) {
+        renderRow('assistant', list[i], i === 0 ? ts : undefined);
+        if (animate && i < list.length - 1) {
+            // 字越多停得越久，模拟打字；但有上限，不让人干等
+            await delay(Math.min(320 + list[i].length * 24, 950));
+        }
+    }
 }
 
 async function renderPersonaList() {
@@ -948,7 +972,7 @@ function closeChat() {
 }
 
 function updateSendBtn() {
-    const has = ($('input').value.trim().length > 0 || !!pendingImage) && !!state.persona;
+    const has = !sending && ($('input').value.trim().length > 0 || !!pendingImage) && !!state.persona;
     $('sendBtn').disabled = !has;
     $('sendBtn').classList.toggle('on', has);
 }
