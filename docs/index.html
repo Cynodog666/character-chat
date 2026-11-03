@@ -895,17 +895,26 @@ function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// 每次进入会话自增，用于打断还没放完的逐条动画
+let renderSeq = 0;
+
 /** 助手回复按行拆成多条消息，一条一条冒出来，像真的在发微信。
  *  animate=true 时逐条出现（实时对话）；恢复历史时不加延迟。 */
 async function renderAssistantText(text, ts, animate) {
     const lines = String(text || '').split('\n').map((s) => s.trim()).filter(Boolean);
     const list = (lines.length ? lines : ['…']).slice(0, 8);
 
+    const mySeq = ++renderSeq;
+
     for (let i = 0; i < list.length; i++) {
+        if (animate && mySeq !== renderSeq) return;   // 切走了，别再往隐藏的页面上画
         renderRow('assistant', list[i], i === 0 ? ts : undefined);
+
         if (animate && i < list.length - 1) {
-            // 字越多停得越久，模拟打字；但有上限，不让人干等
-            await delay(Math.min(320 + list[i].length * 24, 950));
+            // 按下一条的字数算：字越多，打字越久。
+            // 90ms/字 差不多是普通人的手机打字速度，420ms 是抬手换行的停顿。
+            const nextLen = list[i + 1].length;
+            await delay(Math.min(420 + nextLen * 90, 3800));
         }
     }
 }
@@ -940,6 +949,7 @@ async function renderPersonaList() {
 }
 
 async function openChat(card) {
+    renderSeq++;
     state.persona = card;
     state.history = [];
     state.lastDay = '';
@@ -964,6 +974,7 @@ async function openChat(card) {
 }
 
 function closeChat() {
+    renderSeq++;
     $('chatScreen').classList.add('hidden');
     $('listScreen').classList.remove('hidden');
     state.persona = null;
