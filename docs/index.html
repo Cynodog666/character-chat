@@ -408,6 +408,7 @@ const K = {
     seen: 'seen',               // { name: ts } 上次说话的时间，用来判断该不该主动找你
     plans: 'plans',             // { name: [{ at, topic, quote, asked }] } 对方提过的未来安排
     unread: 'unread',           // { name: n } 没看的消息条数
+    world: 'world',             // [{ sub, fact, from, at }] 所有角色共享的近况
     corpus: (src) => `corpus:${src}`,  // { source, chunks, vectors }
     corpusIndex: 'corpus-index',       // [source, ...]
 };
@@ -716,6 +717,51 @@ async function loadMemories(name) {
     return all[name] || [];
 }
 
+// ---- 角色之间共享的近况 ----
+const WORLD_MAX = 60;
+
+async function loadWorld() {
+    return (await idbGet(K.world)) || [];
+}
+
+async function addWorldFacts(items) {
+    if (!items || !items.length) return;
+    const all = await loadWorld();
+    const key = (w) => (w.sub + '|' + w.fact).replace(/\s+/g, '');
+
+    const map = new Map(all.map((w) => [key(w), w]));
+    for (const it of items) {
+        if (!it || !it.sub || !it.fact) continue;
+        const w = {
+            sub: String(it.sub).slice(0, 20),
+            fact: String(it.fact).slice(0, 80),
+            from: String(it.from || '').slice(0, 20),
+            at: Date.now(),
+        };
+        map.set(key(w), w);
+    }
+    const list = [...map.values()].sort((a, b) => a.at - b.at).slice(-WORLD_MAX);
+    await idbSet(K.world, list);
+}
+
+/** 挑和当前话题相关、且比较新的近况 */
+async function pickWorld(query, limit = 6) {
+    const all = await loadWorld();
+    if (!all.length) return [];
+
+    const qv = query ? embedText(query) : null;
+    const now = Date.now();
+    const DAY = 24 * 3600 * 1000;
+
+    const scored = all.map((w) => {
+        const rel = qv ? cosine(qv, embedText(w.sub + ' ' + w.fact)) : 0;
+        const fresh = Math.max(0, 1 - (now - w.at) / DAY);   // 24 小时内的更新鲜
+        return { w, s: rel + fresh * 0.35 };
+    });
+    scored.sort((a, b) => b.s - a.s);
+    return scored.slice(0, limit).map((x) => x.w);
+}
+
 async function loadSummaries(name) {
     const all = (await idbGet(K.summaries)) || {};
     return all[name] || [];
@@ -774,19 +820,26 @@ const SUMMARIZE_AT = 60;      // 聊到多少条就压缩一次
 const KEEP_RECENT = 20;       // 压缩后保留最近多少条
 const MAX_SUMMARIES = 10;     // 最多存几段总结
 
-const MEM_PROMPT = `从下面这段对话里，抽取「对方」说的、值得长期记住的事实。
+const MEM_PROMPT = `从下面这段对话里抽取两类信息。
 
-只抽：称呼与身份（名字、职业、年龄、所在地）、稳定的偏好、重要经历、和角色的约定。
-不要抽：一次性的情绪、关于角色自己的描述、你推测的东西。
+一、关于「对方」的事实：称呼与身份（名字、职业、年龄、所在地）、稳定偏好、重要经历、约定。
+   不要抽：一次性的情绪、推测的东西。
 
-已有主题（能归到其中之一就复用 topic，内容会被覆盖）：
+二、关于某个角色的近况：谁今晚要出门、谁病了、谁在忙什么、家里出了什么事。
+   只抽对话里**明确说过**的，别推测。sub 填角色名。
+
+已有主题（能归到其中之一就复用 topic）：
 {topics}
 
 对话：
 对方：{user}
 角色：{reply}
 
-输出 JSON 数组，每项 {"topic":"简短主题","content":"一句话事实"}。没有就输出 []。`;
+只输出 JSON，不要解释：
+{"user":[{"topic":"简短主题","content":"一句话事实"}],
+ "world":[{"sub":"角色名","fact":"一句话","from":"对方或角色名"}]}
+
+没有就相应给空数组。`;
 
 async function rememberFact(name, userMsg, reply) {
     try {
@@ -797,12 +850,26 @@ async function rememberFact(name, userMsg, reply) {
             content: MEM_PROMPT.replace('{topics}', topics).replace('{user}', userMsg).replace('{reply}', reply),
         }], 0);
 
-        const arr = parseJSON(raw, true);
-        if (!arr.length) return [];
+        // 兼容两种返回：老的纯数组、新的 {user, world}
+        let userItems = [];
+        let worldItems = [];
+        try {
+            const obj = parseJSON(raw);
+            if (Array.isArray(obj)) userItems = obj;
+            else if (obj && typeof obj === 'object') {
+                userItems = Array.isArray(obj.user) ? obj.user : [];
+                worldItems = Array.isArray(obj.world) ? obj.world : [];
+            }
+        } catch (e) {
+            userItems = [];
+        }
+
+        if (worldItems.length) await addWorldFacts(worldItems);
+        if (!userItems.length) return [];
 
         const map = new Map(existing.map((f) => [f.topic.replace(/\s+/g, ''), f]));
         const added = [];
-        for (const item of arr) {
+        for (const item of userItems) {
             if (!item || !item.content) continue;
             const topic = String(item.topic || item.content.slice(0, 12)).replace(/\s+/g, '');
             map.set(topic, { topic, content: String(item.content), updated_at: Date.now() });
@@ -819,7 +886,7 @@ async function rememberFact(name, userMsg, reply) {
  * 6. 对话
  * ========================================================================= */
 
-function buildSystemPrompt(card, memories, facts, summaries) {
+function buildSystemPrompt(card, memories, facts, summaries, world) {
     const L = [];
     L.push(`你就是「${card.name}」${card.identity ? '，' + card.identity : ''}。你是一个活人，不是 AI、不是助手。`);
 
@@ -844,6 +911,11 @@ function buildSystemPrompt(card, memories, facts, summaries) {
 
     if (card.taboos && card.taboos.length) {
         L.push(`\n【你不愿多提的】\n${card.taboos.join('；')}\n这些话题你心里有数，只是不爱说。对方问起可以岔开、可以甩脸子，但别装作不知道。`);
+    }
+
+    if (world && world.length) {
+        L.push(`\n【你知道的别人近况】\n${world.map((w) => `- ${w.sub}：${w.fact}`).join('\n')}\n`
+             + '这些是你平时听来的、看在眼里的。对方问起别人的事，你按这个答，别编，也别装作完全不知道。');
     }
 
     if (summaries && summaries.length) {
@@ -907,17 +979,18 @@ async function sendMessage() {
         const wantMemories = hasCorpus && needsRetrieval(text);   // 闲聊就不翻了
         const rewriteP = wantMemories ? rewriteQuery(text) : Promise.resolve('');
 
-        const [facts, summaries, rewritten] = await Promise.all([
+        const [facts, summaries, rewritten, world] = await Promise.all([
             pickFacts(name, text),
             loadSummaries(name),
             rewriteP,
+            pickWorld(text),
         ]);
 
         const memories = wantMemories
             ? await searchCorpusMulti(state.persona.source, [text, rewritten], 3)
             : [];
 
-        const system = buildSystemPrompt(state.persona, memories, facts, summaries);
+        const system = buildSystemPrompt(state.persona, memories, facts, summaries, world);
 
         const messages = [{ role: 'system', content: system }];
         for (const turn of state.history.slice(-HISTORY_WINDOW)) {
@@ -1388,16 +1461,17 @@ async function markPlanAsked(name, plan) {
 async function generateUnprompted(card, plan) {
     const query = plan ? plan.topic : '';
     const rewritten = card.source && query ? await rewriteQuery(query) : '';
-    const [facts, summaries] = await Promise.all([
+    const [facts, summaries, world] = await Promise.all([
         pickFacts(card.name, query, 6),
         loadSummaries(card.name),
+        pickWorld(query || card.name, 4),
     ]);
 
     const memories = card.source && (query || rewritten)
         ? await searchCorpusMulti(card.source, [query, rewritten], 3)
         : [];
 
-    let system = buildSystemPrompt(card, memories, facts, summaries);
+    let system = buildSystemPrompt(card, memories, facts, summaries, world);
 
     if (plan) {
         system += `\n\n【现在】对方之前跟你提过：${plan.quote}\n`
@@ -1745,6 +1819,7 @@ $('importFile').onchange = async (e) => {
         Object.assign(sessions, data.sessions || {});
         Object.assign(memories, data.memories || {});
         Object.assign(summaries, data.summaries || {});
+        if (Array.isArray(data.world) && data.world.length) await addWorldFacts(data.world);
 
         await idbSet(K.personas, personas);
         await idbSet(K.sessions, sessions);
@@ -1800,6 +1875,7 @@ async function doExport(statusId) {
         memories: (await idbGet(K.memories)) || {},
         summaries: (await idbGet(K.summaries)) || {},
         plans: (await idbGet(K.plans)) || {},
+        world: (await idbGet(K.world)) || [],
     }, 'export-lite.json');
     setStatus($(statusId || importStatusId), '已导出，文件在下载目录里', 'ok');
 }

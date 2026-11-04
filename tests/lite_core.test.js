@@ -144,6 +144,11 @@ ok('注入原文片段', prompt2.includes('他蹲在摊前等鞋'));
 const prompt3 = buildSystemPrompt(fakeCard, [], [], [{ text: '总结一' }]);
 ok('只给总结也能拼', prompt3.includes('总结一'));
 
+const prompt4 = buildSystemPrompt(fakeCard, [], [], [], [{ sub: '魏谦', fact: '今晚要出门', from: '对方' }]);
+ok('注入别人近况', prompt4.includes('魏谦：今晚要出门'));
+ok('无近况时不出现该段', !prompt1.includes('你知道的别人近况'));
+ok('近况段有约束语', prompt4.includes('别编'));
+
 /* ---------- 未来安排：时间解析与关键词 ---------- */
 // 函数在 vm 沙箱里跑，Date 属于另一个 realm，instanceof Date 永远为 false
 const isDate = (v) => Object.prototype.toString.call(v) === '[object Date]';
