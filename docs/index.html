@@ -993,7 +993,9 @@ async function sendMessage() {
         const system = buildSystemPrompt(state.persona, memories, facts, summaries, world);
 
         const messages = [{ role: 'system', content: system }];
-        for (const turn of state.history.slice(-HISTORY_WINDOW)) {
+        // 注意：本轮这句已经先存进 history 了，遍历时要排除最后一条，
+        // 否则同一句话会连着出现两次，模型会以为对方在重复。
+        for (const turn of state.history.slice(0, -1).slice(-HISTORY_WINDOW)) {
             // 历史里发过的图不再重复上传，换一句说明，省 token
             if (turn.role === 'user' && turn.image) {
                 messages.push({ role: 'user', content: turn.content + '（对方发来一张图片）' });
