@@ -540,30 +540,49 @@ async function searchCorpusMulti(source, texts, topK = 3) {
  * 3. 模型调用
  * ========================================================================= */
 
+// 正在进行的请求，熄屏回来时用它判断要不要掐掉
+let activeCtrl = null;
+const REQUEST_TIMEOUT = 90 * 1000;
+
 async function llm(messages, temperature = 0.8, extra) {
     if (!cfg.key) throw new Error('还没填 API Key，点右上角 ⚙ 设置');
     const url = cfg.base.replace(/\/+$/, '') + '/chat/completions';
 
-    const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: 'Bearer ' + cfg.key,
-        },
-        body: JSON.stringify(Object.assign({
-            model: cfg.model,
-            messages,
-            temperature,
-            stream: false,
-        }, extra || {})),
-    });
+    const ctrl = new AbortController();
+    activeCtrl = ctrl;
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT);
 
-    if (!res.ok) {
-        const detail = await res.text().catch(() => '');
-        throw new Error(`接口 ${res.status}：${detail.slice(0, 200)}`);
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: 'Bearer ' + cfg.key,
+            },
+            body: JSON.stringify(Object.assign({
+                model: cfg.model,
+                messages,
+                temperature,
+                stream: false,
+            }, extra || {})),
+            signal: ctrl.signal,
+        });
+
+        if (!res.ok) {
+            const detail = await res.text().catch(() => '');
+            throw new Error(`接口 ${res.status}：${detail.slice(0, 200)}`);
+        }
+        const data = await res.json();
+        return (data.choices && data.choices[0] && data.choices[0].message.content) || '';
+    } catch (err) {
+        if (err.name === 'AbortError') {
+            throw new Error('请求中断了（可能熄屏或网断了），再发一次');
+        }
+        throw err;
+    } finally {
+        clearTimeout(timer);
+        if (activeCtrl === ctrl) activeCtrl = null;
     }
-    const data = await res.json();
-    return (data.choices && data.choices[0] && data.choices[0].message.content) || '';
 }
 
 function parseJSON(raw, expectArray = false) {
@@ -877,6 +896,10 @@ async function sendMessage() {
     updateSendBtn();
     renderRow('user', text || '（图片）', undefined, img ? img.thumb : null);
 
+    // 先把这条存下去：万一熄屏把请求掐了，重开也能看到自己说过什么
+    state.history.push({ role: 'user', content: text || '（图片）', image: img ? img.thumb : null });
+    await saveSession(name, state.history);
+
     const pending = renderRow('assistant', '…');
 
     try {
@@ -915,7 +938,6 @@ async function sendMessage() {
         pending.remove();
         await renderAssistantText(reply, undefined, true);
 
-        state.history.push({ role: 'user', content: text || '（图片）', image: img ? img.thumb : null });
         state.history.push({ role: 'assistant', content: reply });
         await saveSession(name, state.history);
         await touchSeen(name);
@@ -1927,6 +1949,16 @@ $('delBtn').onclick = async () => {
     }
 
     setInterval(idleTick, IDLE_CHECK_MS);
+
+    // 从后台/熄屏回来：如果那个请求还挂着，多半已经死了，掐掉让用户重发
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) return;
+        markActivity();
+        if (!sending || !activeCtrl) return;
+        setTimeout(() => {
+            if (sending && activeCtrl) activeCtrl.abort();
+        }, 8000);
+    });
 
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('./sw.js').catch(() => {});
