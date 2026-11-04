@@ -24,7 +24,7 @@ function extractFn(src, name) {
 }
 
 const NAMES = ['normalizeText', 'chunkText', 'splitSections', 'hash32', 'embedText',
-               'cosine', 'collectMaterial', 'parseJSON'];
+               'cosine', 'collectMaterial', 'parseJSON', 'buildSystemPrompt'];
 
 const consts = `
 const CHUNK_SIZE = 512;
@@ -35,7 +35,7 @@ const code = consts + NAMES.map((n) => extractFn(script, n)).join('\n\n') +
     `\n;({${NAMES.join(',')}})`;
 
 const api = vm.runInNewContext(code, {});
-const { chunkText, splitSections, embedText, cosine, collectMaterial, parseJSON, normalizeText } = api;
+const { chunkText, splitSections, embedText, cosine, collectMaterial, parseJSON, normalizeText, buildSystemPrompt } = api;
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail = '') {
@@ -106,6 +106,29 @@ ok('坏 JSON 抛错', (() => { try { parseJSON('完全不是 JSON'); return fals
 
 /* ---------- 归一化 ---------- */
 ok('压掉多余空白', normalizeText('a  \n\n\n\n  b') === 'a\n\nb');
+
+/* ---------- prompt 拼装（记忆注入） ---------- */
+const fakeCard = {
+    name: '老周', identity: '修鞋摊主', personality: ['倔'],
+    example_lines: ['鞋放这儿吧。'],
+};
+const prompt1 = buildSystemPrompt(fakeCard, [], [], []);
+ok('prompt 含角色名', prompt1.includes('老周'));
+ok('prompt 含异地规则', prompt1.includes('隔着屏幕'));
+ok('无记忆时不出现记忆段', !prompt1.includes('你记得对方的事'));
+
+const prompt2 = buildSystemPrompt(
+    fakeCard,
+    [{ text: '他蹲在摊前等鞋。' }],
+    [{ topic: '称呼', content: '对方叫小张' }],
+    [{ text: '早先聊过工作的事。' }],
+);
+ok('注入事实', prompt2.includes('对方叫小张'));
+ok('注入总结', prompt2.includes('早先聊过工作的事'));
+ok('注入原文片段', prompt2.includes('他蹲在摊前等鞋'));
+
+const prompt3 = buildSystemPrompt(fakeCard, [], [], [{ text: '总结一' }]);
+ok('只给总结也能拼', prompt3.includes('总结一'));
 
 console.log(`\n${'='.repeat(50)}`);
 console.log(`结果：${pass} 通过 / ${fail} 失败`);

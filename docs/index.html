@@ -368,6 +368,7 @@ const K = {
     personas: 'personas',       // { name: card }
     sessions: 'sessions',       // { name: [msg] }
     memories: 'memories',       // { name: [fact] }
+    summaries: 'summaries',     // { name: [{ text, ts }] } 早期对话的压缩印象
     corpus: (src) => `corpus:${src}`,  // { source, chunks, vectors }
     corpusIndex: 'corpus-index',       // [source, ...]
 };
@@ -655,11 +656,63 @@ async function loadMemories(name) {
     return all[name] || [];
 }
 
+async function loadSummaries(name) {
+    const all = (await idbGet(K.summaries)) || {};
+    return all[name] || [];
+}
+
+async function saveSummaries(name, list) {
+    const all = (await idbGet(K.summaries)) || {};
+    all[name] = list.slice(-MAX_SUMMARIES);
+    await idbSet(K.summaries, all);
+}
+
+/** 只挑和这句话相关的事实注入，不再把 50 条全塞进 prompt。
+ *  身份类（名字、职业、住哪）永远带上，否则会忘了你是谁。 */
+const ALWAYS_FACT = /名字|称呼|叫|身份|职业|工作|做什么|年龄|几岁|岁|城市|住处|住哪|老家/;
+
+async function pickFacts(name, query, limit = FACT_INJECT) {
+    const facts = await loadMemories(name);
+    if (facts.length <= limit) return facts;
+
+    const qv = embedText(query || '');
+    const scored = facts.map((f) => ({
+        f,
+        s: cosine(qv, embedText(f.topic + ' ' + f.content)),
+    }));
+    scored.sort((a, b) => b.s - a.s);
+
+    const picked = [];
+    const seen = new Set();
+
+    for (const f of facts) {
+        if (picked.length >= limit) break;
+        if (!seen.has(f.topic) && ALWAYS_FACT.test(f.topic + f.content)) {
+            picked.push(f);
+            seen.add(f.topic);
+        }
+    }
+    for (const { f } of scored) {
+        if (picked.length >= limit) break;
+        if (seen.has(f.topic)) continue;
+        picked.push(f);
+        seen.add(f.topic);
+    }
+    return picked;
+}
+
 async function saveMemories(name, facts) {
     const all = (await idbGet(K.memories)) || {};
     all[name] = facts.slice(-50);
     await idbSet(K.memories, all);
 }
+
+// ---- 记忆相关参数 ----
+const HISTORY_WINDOW = 16;    // 每次发给模型的最近消息条数（8 轮）
+const FACT_INJECT = 10;       // 每轮最多注入的事实条数
+const SUMMARIZE_AT = 60;      // 聊到多少条就压缩一次
+const KEEP_RECENT = 20;       // 压缩后保留最近多少条
+const MAX_SUMMARIES = 10;     // 最多存几段总结
 
 const MEM_PROMPT = `从下面这段对话里，抽取「对方」说的、值得长期记住的事实。
 
@@ -706,7 +759,7 @@ async function rememberFact(name, userMsg, reply) {
  * 6. 对话
  * ========================================================================= */
 
-function buildSystemPrompt(card, memories, facts) {
+function buildSystemPrompt(card, memories, facts, summaries) {
     const L = [];
     L.push(`你就是「${card.name}」${card.identity ? '，' + card.identity : ''}。你是一个活人，不是 AI、不是助手。`);
 
@@ -728,6 +781,10 @@ function buildSystemPrompt(card, memories, facts) {
 
     if (card.taboos && card.taboos.length) {
         L.push(`\n【你不愿多提的】\n${card.taboos.join('；')}\n这些话题你心里有数，只是不爱说。对方问起可以岔开、可以甩脸子，但别装作不知道。`);
+    }
+
+    if (summaries && summaries.length) {
+        L.push(`\n【你们早先聊过的，你还有印象】\n${summaries.map((s) => '- ' + s.text).join('\n')}\n这些是更早的事，别当成刚发生的。`);
     }
 
     if (facts && facts.length) {
@@ -778,14 +835,15 @@ async function sendMessage() {
     const pending = renderRow('assistant', '…');
 
     try {
-        const [facts, memories] = await Promise.all([
-            loadMemories(name),
+        const [facts, memories, summaries] = await Promise.all([
+            pickFacts(name, text),
             state.persona.source ? searchCorpus(state.persona.source, text, 3) : Promise.resolve([]),
+            loadSummaries(name),
         ]);
-        const system = buildSystemPrompt(state.persona, memories, facts);
+        const system = buildSystemPrompt(state.persona, memories, facts, summaries);
 
         const messages = [{ role: 'system', content: system }];
-        for (const turn of state.history.slice(-16)) {
+        for (const turn of state.history.slice(-HISTORY_WINDOW)) {
             // 历史里发过的图不再重复上传，换一句说明，省 token
             if (turn.role === 'user' && turn.image) {
                 messages.push({ role: 'user', content: turn.content + '（对方发来一张图片）' });
@@ -808,6 +866,7 @@ async function sendMessage() {
         await saveSession(name, state.history);
 
         await rememberFact(name, text, reply);
+        compactHistory(name);   // 后台压缩，不阻塞这一轮
     } catch (err) {
         pending.remove();
         let msg = err.message;
@@ -1003,6 +1062,48 @@ function readFile(file) {
     });
 }
 
+const SUMMARY_PROMPT = `下面是你和对方之前的一段聊天记录。请用 60~100 字概括：
+聊了什么、对方透露了哪些关于自己的事、你们之间有什么约定或情绪变化。
+只写事实，不要评价，不要分点，不要用「我」开头的叙述腔。
+
+{text}`;
+
+/** 聊得久了，把最早那批对话压成一段印象，然后从历史里删掉。
+ *  这样记忆还在，token 不会一直涨。失败就跳过，不影响聊天。 */
+async function compactHistory(name) {
+    if (state.history.length <= SUMMARIZE_AT) return;
+
+    const dropCount = state.history.length - KEEP_RECENT;
+    const old = state.history.slice(0, dropCount);
+    const transcript = old
+        .map((m) => (m.role === 'user' ? '对方：' : '我：') + m.content)
+        .join('\n')
+        .slice(0, 8000);
+
+    try {
+        const text = await llm([
+            { role: 'system', content: '你只做记录，只输出一段概括，不寒暄、不评论。' },
+            { role: 'user', content: SUMMARY_PROMPT.replace('{text}', transcript) },
+        ], 0.2);
+
+        const clean = String(text || '').trim().slice(0, 200);
+        if (!clean) return;
+
+        const list = await loadSummaries(name);
+        list.push({ text: clean, ts: Date.now() });
+        await saveSummaries(name, list);
+
+        // 压缩期间可能已经切到别的角色，那就别动当前这块历史
+        if (!state.persona || state.persona.name !== name) return;
+
+        // 期间就算又聊了几句，从头砍掉被总结的那批仍然是对的
+        state.history = state.history.slice(dropCount);
+        await saveSession(name, state.history);
+    } catch (e) {
+        // 压缩失败就算了，历史留着不动
+    }
+}
+
 /** 把图片压到指定边长，返回 dataURL。手机拍的原图动辄几 MB，直接发会很慢 */
 function fileToDataUrl(file, maxSide = 1024, quality = 0.82) {
     return new Promise((resolve, reject) => {
@@ -1187,13 +1288,17 @@ $('importFile').onchange = async (e) => {
         const sessions = (await idbGet(K.sessions)) || {};
         const memories = (await idbGet(K.memories)) || {};
 
+        const summaries = (await idbGet(K.summaries)) || {};
+
         Object.assign(personas, data.personas || {});
         Object.assign(sessions, data.sessions || {});
         Object.assign(memories, data.memories || {});
+        Object.assign(summaries, data.summaries || {});
 
         await idbSet(K.personas, personas);
         await idbSet(K.sessions, sessions);
         await idbSet(K.memories, memories);
+        await idbSet(K.summaries, summaries);
         await renderPersonaList();
 
         const n = Object.keys(data.personas || {}).length;
@@ -1242,6 +1347,7 @@ async function doExport(statusId) {
         personas: (await idbGet(K.personas)) || {},
         sessions: (await idbGet(K.sessions)) || {},
         memories: (await idbGet(K.memories)) || {},
+        summaries: (await idbGet(K.summaries)) || {},
     }, 'export-lite.json');
     setStatus($(statusId || importStatusId), '已导出，文件在下载目录里', 'ok');
 }
@@ -1254,6 +1360,7 @@ async function doExportOne(name) {
 
     const sessions = (await idbGet(K.sessions)) || {};
     const memories = (await idbGet(K.memories)) || {};
+    const summaries = (await idbGet(K.summaries)) || {};
 
     downloadJSON({
         version: 1,
@@ -1261,6 +1368,7 @@ async function doExportOne(name) {
         personas: { [name]: card },
         sessions: sessions[name] ? { [name]: sessions[name] } : {},
         memories: memories[name] ? { [name]: memories[name] } : {},
+        summaries: summaries[name] ? { [name]: summaries[name] } : {},
     }, `角色-${name}.json`);
 }
 
@@ -1355,6 +1463,10 @@ $('delBtn').onclick = async () => {
     const mems = (await idbGet(K.memories)) || {};
     delete mems[name];
     await idbSet(K.memories, mems);
+
+    const sums = (await idbGet(K.summaries)) || {};
+    delete sums[name];
+    await idbSet(K.summaries, sums);
 
     $('moreDlg').close();
     closeChat();
