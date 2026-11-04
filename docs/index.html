@@ -962,6 +962,11 @@ async function sendMessage() {
 
     const name = state.persona.name;
     const img = pendingImage;
+
+    // 关键：把这一轮的会话数组抓住。等模型回复的几秒里，用户可能已经切到别的角色，
+    // 那时 state.history 已经换成另一个数组了，不能再往全局上写。
+    const hist = state.history;
+    const stillHere = () => state.persona && state.persona.name === name && state.history === hist;
     input.value = '';
     input.style.height = 'auto';
     clearPendingImage();
@@ -969,8 +974,8 @@ async function sendMessage() {
     renderRow('user', text || '（图片）', undefined, img ? img.thumb : null);
 
     // 先把这条存下去：万一熄屏把请求掐了，重开也能看到自己说过什么
-    state.history.push({ role: 'user', content: text || '（图片）', image: img ? img.thumb : null });
-    await saveSession(name, state.history);
+    hist.push({ role: 'user', content: text || '（图片）', image: img ? img.thumb : null });
+    await saveSession(name, hist);
 
     const pending = renderRow('assistant', '…');
 
@@ -995,7 +1000,7 @@ async function sendMessage() {
         const messages = [{ role: 'system', content: system }];
         // 注意：本轮这句已经先存进 history 了，遍历时要排除最后一条，
         // 否则同一句话会连着出现两次，模型会以为对方在重复。
-        for (const turn of state.history.slice(0, -1).slice(-HISTORY_WINDOW)) {
+        for (const turn of hist.slice(0, -1).slice(-HISTORY_WINDOW)) {
             // 历史里发过的图不再重复上传，换一句说明，省 token
             if (turn.role === 'user' && turn.image) {
                 messages.push({ role: 'user', content: turn.content + '（对方发来一张图片）' });
@@ -1010,18 +1015,28 @@ async function sendMessage() {
         messages.push({ role: 'user', content: userContent });
 
         const reply = await llm(messages, 0.85);
+
+        if (!stillHere()) {
+            // 已经切走了：回复照样存进原角色的会话，但不画到别人的界面上
+            hist.push({ role: 'assistant', content: reply });
+            await saveSession(name, hist);
+            await addUnread(name, countBubbles(reply));
+            throw new Error('__SWITCHED__');
+        }
+
         pending.remove();
         await renderAssistantText(reply, undefined, true);
 
-        state.history.push({ role: 'assistant', content: reply });
-        await saveSession(name, state.history);
+        hist.push({ role: 'assistant', content: reply });
+        await saveSession(name, hist);
         await touchSeen(name);
 
         // 只有像在透露自己的事时才抽记忆，闲聊不花这次钱
         if (looksLikePersonalInfo(text)) await rememberFact(name, text, reply);
-        rememberPlan(name, text);   // 识别「明天早上有课」这类安排
-        compactHistory(name);       // 后台压缩，不阻塞这一轮
+        rememberPlan(name, text);      // 识别「明天早上有课」这类安排
+        compactHistory(name, hist);    // 后台压缩，不阻塞这一轮
     } catch (err) {
+        if (err.message === '__SWITCHED__') return;   // 切走了，不算错误
         pending.remove();
         let msg = err.message;
         if (img && /image|vision|multimodal|unsupported|invalid/i.test(msg)) {
@@ -1291,11 +1306,12 @@ const SUMMARY_PROMPT = `下面是你和对方之前的一段聊天记录。请�
 
 /** 聊得久了，把最早那批对话压成一段印象，然后从历史里删掉。
  *  这样记忆还在，token 不会一直涨。失败就跳过，不影响聊天。 */
-async function compactHistory(name) {
-    if (state.history.length <= SUMMARIZE_AT) return;
+async function compactHistory(name, hist) {
+    const list = hist || state.history;
+    if (list.length <= SUMMARIZE_AT) return;
 
-    const dropCount = state.history.length - KEEP_RECENT;
-    const old = state.history.slice(0, dropCount);
+    const dropCount = list.length - KEEP_RECENT;
+    const old = list.slice(0, dropCount);
     const transcript = old
         .map((m) => (m.role === 'user' ? '对方：' : '我：') + m.content)
         .join('\n')
@@ -1314,12 +1330,12 @@ async function compactHistory(name) {
         list.push({ text: clean, ts: Date.now() });
         await saveSummaries(name, list);
 
-        // 压缩期间可能已经切到别的角色，那就别动当前这块历史
-        if (!state.persona || state.persona.name !== name) return;
-
         // 期间就算又聊了几句，从头砍掉被总结的那批仍然是对的
-        state.history = state.history.slice(dropCount);
-        await saveSession(name, state.history);
+        const trimmed = list.slice(dropCount);
+        if (state.persona && state.persona.name === name && state.history === list) {
+            state.history = trimmed;      // 还停在这个角色，界面同步
+        }
+        await saveSession(name, trimmed);  // 存档永远按原角色写
     } catch (e) {
         // 压缩失败就算了，历史留着不动
     }
@@ -1506,9 +1522,11 @@ async function pushUnprompted(card, plan) {
     if (!text) return false;
 
     if (state.persona && state.persona.name === card.name) {
+        // 渲染要花几秒，期间用户可能切走，所以先把数组抓住
+        const hist = state.history;
         await renderAssistantText(text, undefined, true);
-        state.history.push({ role: 'assistant', content: text });
-        await saveSession(card.name, state.history);
+        hist.push({ role: 'assistant', content: text });
+        await saveSession(card.name, hist);
         await touchSeen(card.name);
         if (plan) await markPlanAsked(card.name, plan);
     } else {
