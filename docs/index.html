@@ -1341,8 +1341,15 @@ async function scanIncoming() {
         const history = sessions[name] || [];
         if (!history.length) continue;                  // 没聊过就不搭话
 
+        const last = seenMap[name] || 0;
+        if (!last) {
+            // 没有时间戳（刚导入的旧数据），当成刚聊过，别一上来就刷一堆
+            await touchSeen(name);
+            continue;
+        }
+
         const plan = await duePlan(name);
-        const idle = Date.now() - (seenMap[name] || 0);
+        const idle = Date.now() - last;
         if (!plan && idle < PROACTIVE_AFTER) continue;
 
         try {
