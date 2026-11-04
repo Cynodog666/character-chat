@@ -222,7 +222,8 @@
                 <input type="checkbox" id="cfgProactive" style="width:18px;height:18px">
                 隔久了再打开，让他主动来找我
             </label>
-            <div class="hint">纯前端没有后台，只有你打开 App 时才会补发。默认隔 3 小时。</div>
+            <div class="hint">纯前端没有后台，只有 App 开着时才会动。App 挂着 5 分钟没动静他会说一句
+                （连发 3 条没人回就停）；隔 3 小时以上再打开也会补一条。</div>
         </div>
 
         <div class="field">
@@ -863,6 +864,7 @@ async function sendMessage() {
     if (!cfg.key) return openSettings('先填 API Key，才能发消息');
 
     sending = true;
+    markActivity();
     updateSendBtn();
 
     const name = state.persona.name;
@@ -1081,6 +1083,8 @@ async function openChat(card) {
     updateSendBtn();
     $('input').focus();
 
+    markActivity();
+
     // 消息在启动时已经生成好放进会话了，这里只需要把红点清掉
     await clearUnread(card.name);
     renderPersonaList();
@@ -1280,13 +1284,15 @@ async function appendAssistantMessage(name, text, plan) {
     await addUnread(name, countBubbles(text));
     await touchSeen(name);
 
-    if (plan) {
-        const plans = await loadPlans(name);
-        const idx = plans.findIndex((x) => x.at === plan.at && x.topic === plan.topic);
-        if (idx >= 0) {
-            plans[idx].asked = true;
-            await savePlans(name, plans);
-        }
+    if (plan) await markPlanAsked(name, plan);
+}
+
+async function markPlanAsked(name, plan) {
+    const plans = await loadPlans(name);
+    const idx = plans.findIndex((x) => x.at === plan.at && x.topic === plan.topic);
+    if (idx >= 0) {
+        plans[idx].asked = true;
+        await savePlans(name, plans);
     }
 }
 
@@ -1323,6 +1329,73 @@ async function generateUnprompted(card, plan) {
 
     const reply = await llm(messages, 0.9);
     return reply && reply.trim() ? reply : null;
+}
+
+/** 生成并投递一条主动消息：正开着这个角色就就地显示，否则进会话等红点 */
+async function pushUnprompted(card, plan) {
+    const text = await generateUnprompted(card, plan);
+    if (!text) return false;
+
+    if (state.persona && state.persona.name === card.name) {
+        await renderAssistantText(text, undefined, true);
+        state.history.push({ role: 'assistant', content: text });
+        await saveSession(card.name, state.history);
+        await touchSeen(card.name);
+        if (plan) await markPlanAsked(card.name, plan);
+    } else {
+        await appendAssistantMessage(card.name, text, plan);
+        await renderPersonaList();
+    }
+    return true;
+}
+
+// ---- 挂着时的定时搭话 ----
+let lastActivity = Date.now();
+let idleStreak = 0;      // 连续主动说了几条，用户一开口就归零
+let idleBusy = false;
+
+function markActivity() {
+    lastActivity = Date.now();
+    idleStreak = 0;
+}
+
+/** 挑一个可以说话的角色：正在聊的那个优先，否则挑最近聊过的 */
+async function pickIdleTarget() {
+    const personas = (await idbGet(K.personas)) || {};
+    if (state.persona && personas[state.persona.name]) return personas[state.persona.name];
+
+    const sessions = (await idbGet(K.sessions)) || {};
+    const seenMap = (await idbGet(K.seen)) || {};
+    const names = Object.keys(personas).filter((n) => (sessions[n] || []).length);
+    if (!names.length) return null;
+
+    names.sort((a, b) => (seenMap[b] || 0) - (seenMap[a] || 0));
+    return personas[names[0]];
+}
+
+async function idleTick() {
+    if (document.hidden) return;                 // 切到后台就别折腾
+    if (cfg.proactive === false || !cfg.key) return;
+    if (idleBusy) return;
+    if (Date.now() - lastActivity < IDLE_TRIGGER_MS) return;
+    if (idleStreak >= IDLE_MAX_STREAK) return;   // 连发几条没人理，识趣地停
+
+    idleBusy = true;
+    try {
+        const card = await pickIdleTarget();
+        if (!card) return;
+
+        const plan = await duePlan(card.name);
+        const ok = await pushUnprompted(card, plan);
+        if (ok) {
+            idleStreak++;
+            lastActivity = Date.now();           // 再等 5 分钟才会有下一条
+        }
+    } catch (e) {
+        // 失败就算，不打扰
+    } finally {
+        idleBusy = false;
+    }
 }
 
 /** 启动时扫一遍：到点的追问、隔太久的搭话，生成好放那儿等你 */
@@ -1371,6 +1444,9 @@ const PROACTIVE_AFTER = 3 * 3600 * 1000;   // 3 小时没说话，下次打开�
 const PLAN_WINDOW = 72 * 3600 * 1000;      // 只记 72 小时内的安排
 const PLAN_JITTER = 45 * 60 * 1000;        // 到点后随机偏 0~45 分钟，别太准
 const PLAN_MAX = 10;
+const IDLE_CHECK_MS = 60 * 1000;        // 每分钟检查一次
+const IDLE_TRIGGER_MS = 5 * 60 * 1000;  // 5 分钟没动静就说话
+const IDLE_MAX_STREAK = 3;              // 连发 3 条都没人回就停
 
 async function touchSeen(name) {
     const all = (await idbGet(K.seen)) || {};
@@ -1778,6 +1854,8 @@ $('delBtn').onclick = async () => {
     } else {
         scanIncoming();   // 后台把到点的消息生成好，列表上出红点
     }
+
+    setInterval(idleTick, IDLE_CHECK_MS);
 
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('./sw.js').catch(() => {});
