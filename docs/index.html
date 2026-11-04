@@ -310,6 +310,27 @@ let state = { persona: null, history: [], lastDay: '' };
 // 待发送的图片：send 是发给模型的大图，thumb 是存本地/显示用的小图
 let pendingImage = null;
 
+/** 现在的本地时间，给 prompt 用：2026-11-03 星期二 22:40 */
+function nowLabel() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const week = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()];
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} `
+         + `星期${week} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** 用口语描述一天里的时段，方便角色说「这么晚了」这类话 */
+function dayPart() {
+    const h = new Date().getHours();
+    if (h < 5) return '凌晨';
+    if (h < 9) return '早上';
+    if (h < 12) return '上午';
+    if (h < 14) return '中午';
+    if (h < 18) return '下午';
+    if (h < 23) return '晚上';
+    return '深夜';
+}
+
 function esc(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -773,6 +794,9 @@ async function rememberFact(name, userMsg, reply) {
 function buildSystemPrompt(card, memories, facts, summaries) {
     const L = [];
     L.push(`你就是「${card.name}」${card.identity ? '，' + card.identity : ''}。你是一个活人，不是 AI、不是助手。`);
+
+    // 不告诉它时间，它就会瞎猜「现在几点」，或者半夜说「早点上班」
+    L.push(`\n【现在】${nowLabel()}，${dayPart()}。\n聊到时间你可以自然地用，但不用主动报时，也别把精确到分钟的时间挂在嘴上。`);
 
     if (card.personality && card.personality.length) L.push(`\n【你的性子】\n${card.personality.join('、')}`);
     if (card.speech_style) L.push(`\n【你怎么说话】\n${card.speech_style}`);

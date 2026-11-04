@@ -25,7 +25,7 @@ function extractFn(src, name) {
 
 const NAMES = ['normalizeText', 'chunkText', 'splitSections', 'hash32', 'embedText',
                'cosine', 'collectMaterial', 'parseJSON', 'buildSystemPrompt',
-               'parseLocalTime'];
+               'parseLocalTime', 'nowLabel', 'dayPart'];
 
 const consts = `
 const CHUNK_SIZE = 512;
@@ -36,7 +36,7 @@ const code = consts + NAMES.map((n) => extractFn(script, n)).join('\n\n') +
     `\n;({${NAMES.join(',')}})`;
 
 const api = vm.runInNewContext(code, {});
-const { chunkText, splitSections, embedText, cosine, collectMaterial, parseJSON, normalizeText, buildSystemPrompt, parseLocalTime } = api;
+const { chunkText, splitSections, embedText, cosine, collectMaterial, parseJSON, normalizeText, buildSystemPrompt, parseLocalTime, nowLabel, dayPart } = api;
 // TIME_HINT 是常量，直接取出那一行来测真实正则
 const TIME_HINT = eval('(' + script.match(/const TIME_HINT = ([^;]+);/)[1] + ')');
 
@@ -119,6 +119,9 @@ const prompt1 = buildSystemPrompt(fakeCard, [], [], []);
 ok('prompt 含角色名', prompt1.includes('老周'));
 ok('prompt 含异地规则', prompt1.includes('隔着屏幕'));
 ok('无记忆时不出现记忆段', !prompt1.includes('你记得对方的事'));
+ok('prompt 含当前时间', /【现在】\d{4}-\d{2}-\d{2} 星期[日一二三四五六]/.test(prompt1));
+ok('nowLabel 格式正确', /^\d{4}-\d{2}-\d{2} 星期[日一二三四五六] \d{2}:\d{2}$/.test(nowLabel()));
+ok('dayPart 是已知时段', ['凌晨','早上','上午','中午','下午','晚上','深夜'].includes(dayPart()));
 
 const prompt2 = buildSystemPrompt(
     fakeCard,
