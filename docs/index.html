@@ -881,7 +881,8 @@ async function sendMessage() {
 
     try {
         const hasCorpus = !!state.persona.source;
-        const rewriteP = hasCorpus ? rewriteQuery(text) : Promise.resolve('');
+        const wantMemories = hasCorpus && needsRetrieval(text);   // 闲聊就不翻了
+        const rewriteP = wantMemories ? rewriteQuery(text) : Promise.resolve('');
 
         const [facts, summaries, rewritten] = await Promise.all([
             pickFacts(name, text),
@@ -889,7 +890,7 @@ async function sendMessage() {
             rewriteP,
         ]);
 
-        const memories = hasCorpus
+        const memories = wantMemories
             ? await searchCorpusMulti(state.persona.source, [text, rewritten], 3)
             : [];
 
@@ -919,7 +920,8 @@ async function sendMessage() {
         await saveSession(name, state.history);
         await touchSeen(name);
 
-        await rememberFact(name, text, reply);
+        // 只有像在透露自己的事时才抽记忆，闲聊不花这次钱
+        if (looksLikePersonalInfo(text)) await rememberFact(name, text, reply);
         rememberPlan(name, text);   // 识别「明天早上有课」这类安排
         compactHistory(name);       // 后台压缩，不阻塞这一轮
     } catch (err) {
@@ -1138,6 +1140,31 @@ const REWRITE_PROMPT = `把下面这句话改写成适合在小说原文里检�
 
 // 太短的话没有改写价值，还白花一次调用
 const REWRITE_MIN_LEN = 4;
+
+// 寒暄类整句，直接跳过检索
+const CASUAL_LINE = /^(在吗|在不在|在么|你好|您好|hi|hello|早|早安|晚安|睡了|睡了吗|吃了|吃了吗|哈哈+|嗯+|哦+|好|好的|行|收到|没事|算了|谢谢)[！!。.~～\s]*$/i;
+
+// 像在问剧情的问题词
+const PLOT_HINT = /谁|什么|怎么|为什么|为啥|哪[个里儿]|是不是|后来|之前|当年|那次|那次|记得|知道|说过|提过|到底|真的|有没有|多少|几[个次天年]|怎么回事|咋回事/;
+
+/** 这句话值不值得去小说里翻 */
+function needsRetrieval(text) {
+    const t = String(text || '').trim();
+    if (!t || t.length < 6) return false;          // 「在吗」「晚安」这种
+    if (CASUAL_LINE.test(t)) return false;
+    return PLOT_HINT.test(t);
+}
+
+// 像在透露自己的信息
+const PERSONAL_HINT = /我叫|我是|我的名字|我今年|我\d+岁|我在.*(上学|读书|工作|上班|实习)|我做|我住|我家|我老家|我喜欢|我不喜欢|我讨厌|我专业|我学|我生日|我最近|我打算|我要去|我明天|我后天|我下周|我们约|答应|说好/;
+
+/** 这句话值不值得抽一次长期记忆 */
+function looksLikePersonalInfo(text) {
+    const t = String(text || '').trim();
+    if (!t) return false;
+    if (PERSONAL_HINT.test(t)) return true;
+    return t.length >= 30;                          // 长篇大论里通常有信息
+}
 
 /** 让对话模型把问题改写成检索关键词；失败就返回空串，用原句检索 */
 async function rewriteQuery(text) {

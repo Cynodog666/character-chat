@@ -25,18 +25,26 @@ function extractFn(src, name) {
 
 const NAMES = ['normalizeText', 'chunkText', 'splitSections', 'hash32', 'embedText',
                'cosine', 'collectMaterial', 'parseJSON', 'buildSystemPrompt',
-               'parseLocalTime', 'nowLabel', 'dayPart'];
+               'parseLocalTime', 'nowLabel', 'dayPart',
+               'needsRetrieval', 'looksLikePersonalInfo'];
 
 const consts = `
 const CHUNK_SIZE = 512;
 const CHUNK_OVERLAP = 64;
 const VEC_DIM = 1024;
 `;
-const code = consts + NAMES.map((n) => extractFn(script, n)).join('\n\n') +
+const EXTRA = ['TIME_HINT', 'CASUAL_LINE', 'PLOT_HINT', 'PERSONAL_HINT', 'REWRITE_MIN_LEN'];
+const extraConsts = EXTRA.map((n) => {
+    const m = script.match(new RegExp('const ' + n + ' = [^;]+;'));
+    return m ? m[0] : '';
+}).join('\n');
+
+const code = consts + extraConsts + NAMES.map((n) => extractFn(script, n)).join('\n\n') +
     `\n;({${NAMES.join(',')}})`;
 
 const api = vm.runInNewContext(code, {});
 const { chunkText, splitSections, embedText, cosine, collectMaterial, parseJSON, normalizeText, buildSystemPrompt, parseLocalTime, nowLabel, dayPart } = api;
+const { needsRetrieval, looksLikePersonalInfo } = api;
 // TIME_HINT 是常量，直接取出那一行来测真实正则
 const TIME_HINT = eval('(' + script.match(/const TIME_HINT = ([^;]+);/)[1] + ')');
 
@@ -154,6 +162,20 @@ ok('时间词：三点见面', TIME_HINT.test('三点见面吧'));
 ok('时间词：周末回家', TIME_HINT.test('周末回家一趟'));
 ok('无时间词不触发', !TIME_HINT.test('今天天气不错'));
 ok('无时间词不触发2', !TIME_HINT.test('你吃饭了吗'));
+
+/* ---------- 花不花钱的判断 ---------- */
+ok('寒暄不检索', !needsRetrieval('在吗'));
+ok('晚安不检索', !needsRetrieval('晚安'));
+ok('短句不检索', !needsRetrieval('你干嘛'));
+ok('问剧情要检索', needsRetrieval('他弟弟后来怎么样了'));
+ok('问人名要检索', needsRetrieval('那个麻子是谁撞的'));
+ok('问细节要检索', needsRetrieval('你还记不记得那天晚上发生了什么'));
+ok('日常长句不检索', !needsRetrieval('今天下雨了没带伞站在门口等了好久'));
+
+ok('透露身份要记', looksLikePersonalInfo('我叫小张，做前端的'));
+ok('透露职业要记', looksLikePersonalInfo('我今年在一家小公司上班'));
+ok('寒暄不记', !looksLikePersonalInfo('好的'));
+ok('长句要记', looksLikePersonalInfo('今天'.repeat(20)));
 
 console.log(`\n${'='.repeat(50)}`);
 console.log(`结果：${pass} 通过 / ${fail} 失败`);
