@@ -379,6 +379,7 @@ const K = {
     memories: 'memories',       // { name: [fact] }
     summaries: 'summaries',     // { name: [{ text, ts }] } 早期对话的压缩印象
     seen: 'seen',               // { name: ts } 上次说话的时间，用来判断该不该主动找你
+    plans: 'plans',             // { name: [{ at, topic, quote, asked }] } 对方提过的未来安排
     corpus: (src) => `corpus:${src}`,  // { source, chunks, vectors }
     corpusIndex: 'corpus-index',       // [source, ...]
 };
@@ -877,7 +878,8 @@ async function sendMessage() {
         await touchSeen(name);
 
         await rememberFact(name, text, reply);
-        compactHistory(name);   // 后台压缩，不阻塞这一轮
+        rememberPlan(name, text);   // 识别「明天早上有课」这类安排
+        compactHistory(name);       // 后台压缩，不阻塞这一轮
     } catch (err) {
         pending.remove();
         let msg = err.message;
@@ -1042,7 +1044,10 @@ async function openChat(card) {
     updateSendBtn();
     $('input').focus();
 
-    maybeProactive(card);
+    (async () => {
+        const followed = await followUpPlan(card);
+        if (!followed) await maybeProactive(card);
+    })();
 }
 
 function closeChat() {
@@ -1117,14 +1122,154 @@ async function compactHistory(name) {
     }
 }
 
+// ---- 未来的安排（"明天早上有课"这类）----
+
+const PLAN_PROMPT = `现在是 {now}。
+
+下面是对方向你（角色）说的话。他有没有提到**未来要做的事**？
+（明天上课、后天考试、今晚开会、周末回家、几点见面……）
+
+有就输出 JSON：
+{"has":true,"at":"YYYY-MM-DD HH:MM","topic":"简短主题","quote":"他原话里的关键片段"}
+
+没有就输出 {"has":false}
+
+规则：
+- at 用 24 小时制；推断到小时就够，分钟填 00
+- 只认 72 小时内的事，更远的一律 has:false
+- 拿不准、只是随口一说、没有具体时间，也输出 has:false
+- 只输出 JSON，不要解释
+
+对方：{text}`;
+
+// 只有出现时间词才值得多调一次模型
+const TIME_HINT = /明天|后天|今天早|今晚|今早|早上|上午|中午|下午|晚上|周[一二三四五六日天]|下[周个]月|\d+点|\d+号|考试|上课|上班|开会|面试|约|见面|出差|回家|去医院/;
+
+function parseLocalTime(str) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/.exec(String(str || '').trim());
+    if (!m) return null;
+    const [_, y, mo, d, h, mi] = m;
+    return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), 0, 0);
+}
+
+async function planFrom(text) {
+    if (!TIME_HINT.test(text)) return null;
+
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const nowStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} `
+                 + `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+
+    const raw = await llm([{
+        role: 'user',
+        content: PLAN_PROMPT.replace('{now}', nowStr).replace('{text}', text),
+    }], 0);
+
+    const obj = parseJSON(raw);
+    if (!obj || !obj.has) return null;
+
+    const at = parseLocalTime(obj.at);
+    if (!at) return null;
+
+    const gap = at.getTime() - now.getTime();
+    if (gap < 0 || gap > PLAN_WINDOW) return null;
+
+    return {
+        at: at.getTime() + Math.floor(Math.random() * PLAN_JITTER),   // 随机偏一点
+        topic: String(obj.topic || '那件事').slice(0, 20),
+        quote: String(obj.quote || text).slice(0, 60),
+        asked: false,
+    };
+}
+
+async function loadPlans(name) {
+    const all = (await idbGet(K.plans)) || {};
+    return all[name] || [];
+}
+
+async function savePlans(name, list) {
+    const all = (await idbGet(K.plans)) || {};
+    all[name] = list.slice(-PLAN_MAX);
+    await idbSet(K.plans, all);
+}
+
+async function rememberPlan(name, text) {
+    try {
+        const plan = await planFrom(text);
+        if (!plan) return;
+        const list = await loadPlans(name);
+        list.push(plan);
+        await savePlans(name, list);
+    } catch (e) {
+        // 识别失败就算了
+    }
+}
+
+/** 取一条已经到点、还没问过的安排 */
+async function duePlan(name) {
+    const list = await loadPlans(name);
+    const now = Date.now();
+    return list.find((x) => !x.asked && x.at <= now) || null;
+}
+
 // ---- 主动消息 ----
 const PROACTIVE_AFTER = 3 * 3600 * 1000;   // 3 小时没说话，下次打开他会来找你
+const PLAN_WINDOW = 72 * 3600 * 1000;      // 只记 72 小时内的安排
+const PLAN_JITTER = 45 * 60 * 1000;        // 到点后随机偏 0~45 分钟，别太准
+const PLAN_MAX = 10;
 const PROACTIVE_IDLE = 1500;               // 进聊天页后等 1.5 秒再发，别太急
 
 async function touchSeen(name) {
     const all = (await idbGet(K.seen)) || {};
     all[name] = Date.now();
     await idbSet(K.seen, all);
+}
+
+/** 先说对方提过的那件事，这是最该主动开口的时机 */
+async function followUpPlan(card) {
+    if (!cfg.key) return false;
+
+    const plan = await duePlan(card.name);
+    if (!plan) return false;
+
+    try {
+        const [facts, summaries] = await Promise.all([
+            pickFacts(card.name, plan.topic, 6),
+            loadSummaries(card.name),
+        ]);
+        let system = buildSystemPrompt(card, [], facts, summaries);
+        system += `\n\n【现在】对方之前跟你提过：${plan.quote}\n`
+                + `（就是「${plan.topic}」这件事）现在时间到了，你想起来，顺口问一句。\n`
+                + '发 1~2 句，像随口一问，不要像客服回访，不要说「不知道你还记不记得」。';
+
+        const messages = [{ role: 'system', content: system }];
+        for (const turn of state.history.slice(-6)) {
+            if (turn.role === 'user' && turn.image) {
+                messages.push({ role: 'user', content: turn.content + '（对方发来一张图片）' });
+            } else {
+                messages.push({ role: turn.role, content: turn.content });
+            }
+        }
+        messages.push({ role: 'user', content: '（对方这会儿没说话）' });
+
+        const reply = await llm(messages, 0.9);
+        if (!reply || !state.persona || state.persona.name !== card.name) return false;
+
+        await renderAssistantText(reply, undefined, true);
+        state.history.push({ role: 'assistant', content: reply });
+        await saveSession(card.name, state.history);
+
+        const list = await loadPlans(card.name);
+        const idx = list.findIndex((x) => x.at === plan.at && x.topic === plan.topic);
+        if (idx >= 0) {
+            list[idx].asked = true;
+            await savePlans(card.name, list);
+        }
+        await touchSeen(card.name);
+        return true;
+    } catch (e) {
+        return false;
+    }
 }
 
 /** 隔得够久的话，让角色主动发一条。失败静默跳过。 */
@@ -1417,6 +1562,7 @@ async function doExport(statusId) {
         sessions: (await idbGet(K.sessions)) || {},
         memories: (await idbGet(K.memories)) || {},
         summaries: (await idbGet(K.summaries)) || {},
+        plans: (await idbGet(K.plans)) || {},
     }, 'export-lite.json');
     setStatus($(statusId || importStatusId), '已导出，文件在下载目录里', 'ok');
 }
@@ -1536,6 +1682,14 @@ $('delBtn').onclick = async () => {
     const sums = (await idbGet(K.summaries)) || {};
     delete sums[name];
     await idbSet(K.summaries, sums);
+
+    const plans = (await idbGet(K.plans)) || {};
+    delete plans[name];
+    await idbSet(K.plans, plans);
+
+    const seen = (await idbGet(K.seen)) || {};
+    delete seen[name];
+    await idbSet(K.seen, seen);
 
     $('moreDlg').close();
     closeChat();

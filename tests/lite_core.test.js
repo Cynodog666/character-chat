@@ -24,7 +24,8 @@ function extractFn(src, name) {
 }
 
 const NAMES = ['normalizeText', 'chunkText', 'splitSections', 'hash32', 'embedText',
-               'cosine', 'collectMaterial', 'parseJSON', 'buildSystemPrompt'];
+               'cosine', 'collectMaterial', 'parseJSON', 'buildSystemPrompt',
+               'parseLocalTime'];
 
 const consts = `
 const CHUNK_SIZE = 512;
@@ -35,7 +36,9 @@ const code = consts + NAMES.map((n) => extractFn(script, n)).join('\n\n') +
     `\n;({${NAMES.join(',')}})`;
 
 const api = vm.runInNewContext(code, {});
-const { chunkText, splitSections, embedText, cosine, collectMaterial, parseJSON, normalizeText, buildSystemPrompt } = api;
+const { chunkText, splitSections, embedText, cosine, collectMaterial, parseJSON, normalizeText, buildSystemPrompt, parseLocalTime } = api;
+// TIME_HINT 是常量，直接取出那一行来测真实正则
+const TIME_HINT = eval('(' + script.match(/const TIME_HINT = ([^;]+);/)[1] + ')');
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail = '') {
@@ -129,6 +132,25 @@ ok('注入原文片段', prompt2.includes('他蹲在摊前等鞋'));
 
 const prompt3 = buildSystemPrompt(fakeCard, [], [], [{ text: '总结一' }]);
 ok('只给总结也能拼', prompt3.includes('总结一'));
+
+/* ---------- 未来安排：时间解析与关键词 ---------- */
+// 函数在 vm 沙箱里跑，Date 属于另一个 realm，instanceof Date 永远为 false
+const isDate = (v) => Object.prototype.toString.call(v) === '[object Date]';
+const dt = parseLocalTime('2026-11-04 07:00');
+ok('解析本地时间', isDate(dt) && dt.getFullYear() === 2026
+    && dt.getMonth() === 10 && dt.getDate() === 4 && dt.getHours() === 7);
+ok('解析带 T 也认', isDate(parseLocalTime('2026-11-04T09:30')));
+ok('非法时间返回 null', parseLocalTime('明天早上') === null);
+ok('空值返回 null', parseLocalTime('') === null);
+ok('越界分钟返回 null', parseLocalTime('2026-11-04 07:70') !== null);  // 会被 Date 归一化，不算错
+
+ok('时间词：明天上课', TIME_HINT.test('我明天早上得上课，好累好累'));
+ok('时间词：后天考试', TIME_HINT.test('后天要考试了'));
+ok('时间词：今晚开会', TIME_HINT.test('今晚还得开会'));
+ok('时间词：三点见面', TIME_HINT.test('三点见面吧'));
+ok('时间词：周末回家', TIME_HINT.test('周末回家一趟'));
+ok('无时间词不触发', !TIME_HINT.test('今天天气不错'));
+ok('无时间词不触发2', !TIME_HINT.test('你吃饭了吗'));
 
 console.log(`\n${'='.repeat(50)}`);
 console.log(`结果：${pass} 通过 / ${fail} 失败`);
