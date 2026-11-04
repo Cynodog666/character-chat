@@ -222,7 +222,7 @@
                 <input type="checkbox" id="cfgProactive" style="width:18px;height:18px">
                 隔久了再打开，让他主动来找我
             </label>
-            <div class="hint">纯前端没有后台，只有 App 开着时才会动。App 挂着 5 分钟没动静他会说一句
+            <div class="hint">纯前端没有后台，只有 App 开着时才会动。App 挂着 1~5 分钟（随机）没动静他会说一句
                 （连发 3 条没人回就停）；隔 3 小时以上再打开也会补一条。</div>
         </div>
 
@@ -1443,13 +1443,18 @@ async function pushUnprompted(card, plan) {
 }
 
 // ---- 挂着时的定时搭话 ----
-let lastActivity = Date.now();
 let idleStreak = 0;      // 连续主动说了几条，用户一开口就归零
 let idleBusy = false;
+let idleNextAt = 0;      // 下一次允许开口的时间点
+
+/** 每轮重新抽一个 1~5 分钟的随机间隔，别让它像定时任务 */
+function scheduleIdle() {
+    idleNextAt = Date.now() + IDLE_MIN_MS + Math.random() * (IDLE_MAX_MS - IDLE_MIN_MS);
+}
 
 function markActivity() {
-    lastActivity = Date.now();
     idleStreak = 0;
+    scheduleIdle();
 }
 
 /** 挑一个可以说话的角色：正在聊的那个优先，否则挑最近聊过的 */
@@ -1470,7 +1475,7 @@ async function idleTick() {
     if (document.hidden) return;                 // 切到后台就别折腾
     if (cfg.proactive === false || !cfg.key) return;
     if (idleBusy) return;
-    if (Date.now() - lastActivity < IDLE_TRIGGER_MS) return;
+    if (Date.now() < idleNextAt) return;
     if (idleStreak >= IDLE_MAX_STREAK) return;   // 连发几条没人理，识趣地停
 
     idleBusy = true;
@@ -1482,7 +1487,7 @@ async function idleTick() {
         const ok = await pushUnprompted(card, plan);
         if (ok) {
             idleStreak++;
-            lastActivity = Date.now();           // 再等 5 分钟才会有下一条
+            scheduleIdle();                      // 下一句再等 1~5 分钟
         }
     } catch (e) {
         // 失败就算，不打扰
@@ -1537,8 +1542,9 @@ const PROACTIVE_AFTER = 3 * 3600 * 1000;   // 3 小时没说话，下次打开�
 const PLAN_WINDOW = 72 * 3600 * 1000;      // 只记 72 小时内的安排
 const PLAN_JITTER = 45 * 60 * 1000;        // 到点后随机偏 0~45 分钟，别太准
 const PLAN_MAX = 10;
-const IDLE_CHECK_MS = 60 * 1000;        // 每分钟检查一次
-const IDLE_TRIGGER_MS = 5 * 60 * 1000;  // 5 分钟没动静就说话
+const IDLE_CHECK_MS = 20 * 1000;        // 20 秒检查一次，1 分钟的阈值才不至于迟太多
+const IDLE_MIN_MS = 60 * 1000;          // 最少等 1 分钟
+const IDLE_MAX_MS = 5 * 60 * 1000;      // 最多等 5 分钟
 const IDLE_MAX_STREAK = 3;              // 连发 3 条都没人回就停
 
 async function touchSeen(name) {
@@ -1948,6 +1954,7 @@ $('delBtn').onclick = async () => {
         scanIncoming();   // 后台把到点的消息生成好，列表上出红点
     }
 
+    scheduleIdle();
     setInterval(idleTick, IDLE_CHECK_MS);
 
     // 从后台/熄屏回来：如果那个请求还挂着，多半已经死了，掐掉让用户重发
