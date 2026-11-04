@@ -213,6 +213,14 @@
         </div>
 
         <div class="field">
+            <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text)">
+                <input type="checkbox" id="cfgProactive" style="width:18px;height:18px">
+                隔久了再打开，让他主动来找我
+            </label>
+            <div class="hint">纯前端没有后台，只有你打开 App 时才会补发。默认隔 3 小时。</div>
+        </div>
+
+        <div class="field">
             <label>数据迁移</label>
             <div class="actions" style="margin-top:0">
                 <button class="btn" id="importBtn">导入电脑端数据</button>
@@ -294,6 +302,7 @@ const DEFAULT_CFG = {
     base: 'https://api.deepseek.com/v1',
     key: '',
     model: 'deepseek-chat',
+    proactive: true,     // 隔久了再打开，角色主动发一条
 };
 
 let cfg = { ...DEFAULT_CFG };
@@ -369,6 +378,7 @@ const K = {
     sessions: 'sessions',       // { name: [msg] }
     memories: 'memories',       // { name: [fact] }
     summaries: 'summaries',     // { name: [{ text, ts }] } 早期对话的压缩印象
+    seen: 'seen',               // { name: ts } 上次说话的时间，用来判断该不该主动找你
     corpus: (src) => `corpus:${src}`,  // { source, chunks, vectors }
     corpusIndex: 'corpus-index',       // [source, ...]
 };
@@ -864,6 +874,7 @@ async function sendMessage() {
         state.history.push({ role: 'user', content: text || '（图片）', image: img ? img.thumb : null });
         state.history.push({ role: 'assistant', content: reply });
         await saveSession(name, state.history);
+        await touchSeen(name);
 
         await rememberFact(name, text, reply);
         compactHistory(name);   // 后台压缩，不阻塞这一轮
@@ -1030,6 +1041,8 @@ async function openChat(card) {
     }
     updateSendBtn();
     $('input').focus();
+
+    maybeProactive(card);
 }
 
 function closeChat() {
@@ -1101,6 +1114,60 @@ async function compactHistory(name) {
         await saveSession(name, state.history);
     } catch (e) {
         // 压缩失败就算了，历史留着不动
+    }
+}
+
+// ---- 主动消息 ----
+const PROACTIVE_AFTER = 3 * 3600 * 1000;   // 3 小时没说话，下次打开他会来找你
+const PROACTIVE_IDLE = 1500;               // 进聊天页后等 1.5 秒再发，别太急
+
+async function touchSeen(name) {
+    const all = (await idbGet(K.seen)) || {};
+    all[name] = Date.now();
+    await idbSet(K.seen, all);
+}
+
+/** 隔得够久的话，让角色主动发一条。失败静默跳过。 */
+async function maybeProactive(card) {
+    if (cfg.proactive === false || !cfg.key) return;
+    if (!state.history.length) return;          // 没聊过就别冒出来
+
+    const all = (await idbGet(K.seen)) || {};
+    const last = all[card.name] || 0;
+    if (Date.now() - last < PROACTIVE_AFTER) return;
+
+    await delay(PROACTIVE_IDLE);
+    if (!state.persona || state.persona.name !== card.name) return;
+
+    try {
+        const [facts, summaries] = await Promise.all([
+            pickFacts(card.name, '', 6),
+            loadSummaries(card.name),
+        ]);
+        let system = buildSystemPrompt(card, [], facts, summaries);
+        system += '\n\n【现在】你正闲着，忽然想起对方，想主动说句话。\n'
+                + '发 1~2 句就好，像随手发个微信。不要说「在吗」「忙不忙」「好久没联系」这类客套，\n'
+                + '可以说你在做什么、想起他之前说过的事、或者问他一件具体的小事。';
+
+        const messages = [{ role: 'system', content: system }];
+        for (const turn of state.history.slice(-6)) {
+            if (turn.role === 'user' && turn.image) {
+                messages.push({ role: 'user', content: turn.content + '（对方发来一张图片）' });
+            } else {
+                messages.push({ role: turn.role, content: turn.content });
+            }
+        }
+        messages.push({ role: 'user', content: '（对方这会儿没说话）' });
+
+        const reply = await llm(messages, 0.9);
+        if (!reply || !state.persona || state.persona.name !== card.name) return;
+
+        await renderAssistantText(reply, undefined, true);
+        state.history.push({ role: 'assistant', content: reply });
+        await saveSession(card.name, state.history);
+        await touchSeen(card.name);
+    } catch (e) {
+        // 主动消息失败就算了，不打扰用户
     }
 }
 
@@ -1247,6 +1314,7 @@ function openSettings(tip) {
     $('cfgBase').value = cfg.base;
     $('cfgKey').value = cfg.key;
     $('cfgModel').value = cfg.model;
+    $('cfgProactive').checked = cfg.proactive !== false;
     setStatus($('cfgStatus'), tip || '', tip ? 'err' : '');
     if (!$('settingsDlg').open) $('settingsDlg').showModal();
 }
@@ -1258,6 +1326,7 @@ $('cfgSave').onclick = async () => {
         base: $('cfgBase').value.trim() || DEFAULT_CFG.base,
         key: $('cfgKey').value.trim(),
         model: $('cfgModel').value.trim() || DEFAULT_CFG.model,
+        proactive: $('cfgProactive').checked,
     };
     await idbSet(K.cfg, cfg);
     setStatus($('cfgStatus'), '已保存', 'ok');
