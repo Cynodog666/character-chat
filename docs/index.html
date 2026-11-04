@@ -519,17 +519,19 @@ function cosine(a, b) {
     return dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
 }
 
-/** 在某个语料里检索 top-k */
-async function searchCorpus(source, query, topK = 3) {
+/** 用多个查询串检索，每块取最高分。改写句和原句各算一遍，召回更全 */
+async function searchCorpusMulti(source, texts, topK = 3) {
     const corpus = await idbGet(K.corpus(source));
     if (!corpus || !corpus.chunks.length) return [];
-    const qv = embedText(query);
 
-    const scored = corpus.chunks.map((chunk, i) => ({
-        text: chunk.text,
-        section: chunk.section,
-        score: cosine(qv, corpus.vectors[i]),
-    }));
+    const queries = texts.filter((t) => t && t.trim()).map(embedText);
+    if (!queries.length) return [];
+
+    const scored = corpus.chunks.map((chunk, i) => {
+        let best = -1;
+        for (const qv of queries) best = Math.max(best, cosine(qv, corpus.vectors[i]));
+        return { text: chunk.text, section: chunk.section, score: best };
+    });
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, topK);
 }
@@ -538,7 +540,7 @@ async function searchCorpus(source, query, topK = 3) {
  * 3. 模型调用
  * ========================================================================= */
 
-async function llm(messages, temperature = 0.8) {
+async function llm(messages, temperature = 0.8, extra) {
     if (!cfg.key) throw new Error('还没填 API Key，点右上角 ⚙ 设置');
     const url = cfg.base.replace(/\/+$/, '') + '/chat/completions';
 
@@ -548,12 +550,12 @@ async function llm(messages, temperature = 0.8) {
             'Content-Type': 'application/json',
             Authorization: 'Bearer ' + cfg.key,
         },
-        body: JSON.stringify({
+        body: JSON.stringify(Object.assign({
             model: cfg.model,
             messages,
             temperature,
             stream: false,
-        }),
+        }, extra || {})),
     });
 
     if (!res.ok) {
@@ -878,11 +880,19 @@ async function sendMessage() {
     const pending = renderRow('assistant', '…');
 
     try {
-        const [facts, memories, summaries] = await Promise.all([
+        const hasCorpus = !!state.persona.source;
+        const rewriteP = hasCorpus ? rewriteQuery(text) : Promise.resolve('');
+
+        const [facts, summaries, rewritten] = await Promise.all([
             pickFacts(name, text),
-            state.persona.source ? searchCorpus(state.persona.source, text, 3) : Promise.resolve([]),
             loadSummaries(name),
+            rewriteP,
         ]);
+
+        const memories = hasCorpus
+            ? await searchCorpusMulti(state.persona.source, [text, rewritten], 3)
+            : [];
+
         const system = buildSystemPrompt(state.persona, memories, facts, summaries);
 
         const messages = [{ role: 'system', content: system }];
@@ -1120,6 +1130,35 @@ function readFile(file) {
     });
 }
 
+const REWRITE_PROMPT = `把下面这句话改写成适合在小说原文里检索的关键词。
+人名、地名、动作保留，把口语说法换成原文可能用的书面说法。
+只输出关键词，用空格分开，不超过 10 个词，不要解释。
+
+{text}`;
+
+// 太短的话没有改写价值，还白花一次调用
+const REWRITE_MIN_LEN = 4;
+
+/** 让对话模型把问题改写成检索关键词；失败就返回空串，用原句检索 */
+async function rewriteQuery(text) {
+    const t = String(text || '').trim();
+    if (t.length < REWRITE_MIN_LEN) return '';
+    try {
+        const out = await llm([{
+            role: 'user',
+            content: REWRITE_PROMPT.replace('{text}', t),
+        }], 0.2, { max_tokens: 40 });
+
+        return String(out || '')
+            .replace(/[\n"「」『』]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 80);
+    } catch (e) {
+        return '';
+    }
+}
+
 const SUMMARY_PROMPT = `下面是你和对方之前的一段聊天记录。请用 60~100 字概括：
 聊了什么、对方透露了哪些关于自己的事、你们之间有什么约定或情绪变化。
 只写事实，不要评价，不要分点，不要用「我」开头的叙述腔。
@@ -1299,12 +1338,17 @@ async function markPlanAsked(name, plan) {
 /** 生成一条「没人问他、他自己说」的消息，只返回文本 */
 async function generateUnprompted(card, plan) {
     const query = plan ? plan.topic : '';
+    const rewritten = card.source && query ? await rewriteQuery(query) : '';
     const [facts, summaries] = await Promise.all([
         pickFacts(card.name, query, 6),
         loadSummaries(card.name),
     ]);
 
-    let system = buildSystemPrompt(card, [], facts, summaries);
+    const memories = card.source && (query || rewritten)
+        ? await searchCorpusMulti(card.source, [query, rewritten], 3)
+        : [];
+
+    let system = buildSystemPrompt(card, memories, facts, summaries);
 
     if (plan) {
         system += `\n\n【现在】对方之前跟你提过：${plan.quote}\n`
