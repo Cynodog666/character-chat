@@ -65,6 +65,11 @@
     .p-main { min-width: 0; flex: 1; }
     .p-name { font-size: 15px; font-weight: 600; margin-bottom: 3px; }
     .p-desc { font-size: 12.5px; color: var(--sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .badge {
+        flex-shrink: 0; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
+        background: #fa5151; color: #fff; font-size: 12px; font-weight: 600;
+        display: flex; align-items: center; justify-content: center; line-height: 1;
+    }
     .empty { margin: auto; padding: 40px 30px; text-align: center; color: var(--sub); font-size: 13.5px; line-height: 2; }
 
     /* ---------- 聊天 ---------- */
@@ -401,6 +406,7 @@ const K = {
     summaries: 'summaries',     // { name: [{ text, ts }] } 早期对话的压缩印象
     seen: 'seen',               // { name: ts } 上次说话的时间，用来判断该不该主动找你
     plans: 'plans',             // { name: [{ at, topic, quote, asked }] } 对方提过的未来安排
+    unread: 'unread',           // { name: n } 没看的消息条数
     corpus: (src) => `corpus:${src}`,  // { source, chunks, vectors }
     corpusIndex: 'corpus-index',       // [source, ...]
 };
@@ -1025,14 +1031,21 @@ async function renderPersonaList() {
         return;
     }
 
+    const unread = (await idbGet(K.unread)) || {};
+
     list.innerHTML = names.map((n) => {
         const p = all[n];
+        const cnt = unread[n] || 0;
+        const badge = cnt > 0
+            ? `<span class="badge">${cnt > 99 ? '99+' : cnt}</span>`
+            : '';
         return `<div class="persona" data-name="${esc(n)}">
             <span class="avatar">${esc(n.slice(0, 1))}</span>
             <span class="p-main">
                 <div class="p-name">${esc(n)}</div>
                 <div class="p-desc">${esc(p.identity || '')}</div>
             </span>
+            ${badge}
         </div>`;
     }).join('');
 
@@ -1068,10 +1081,9 @@ async function openChat(card) {
     updateSendBtn();
     $('input').focus();
 
-    (async () => {
-        const followed = await followUpPlan(card);
-        if (!followed) await maybeProactive(card);
-    })();
+    // 消息在启动时已经生成好放进会话了，这里只需要把红点清掉
+    await clearUnread(card.name);
+    renderPersonaList();
 }
 
 function closeChat() {
@@ -1236,108 +1248,127 @@ async function duePlan(name) {
     return list.find((x) => !x.asked && x.at <= now) || null;
 }
 
+// ---- 未读与后台生成 ----
+
+async function addUnread(name, n) {
+    const all = (await idbGet(K.unread)) || {};
+    all[name] = (all[name] || 0) + n;
+    await idbSet(K.unread, all);
+}
+
+async function clearUnread(name) {
+    const all = (await idbGet(K.unread)) || {};
+    if (!all[name]) return;
+    delete all[name];
+    await idbSet(K.unread, all);
+}
+
+/** 一条回复会拆成几个气泡，未读就按气泡数算 */
+function countBubbles(text) {
+    const lines = String(text || '').split('\n').map((s) => s.trim()).filter(Boolean);
+    return Math.max(1, Math.min(lines.length, 8));
+}
+
+/** 把角色主动发的消息写进会话，不碰界面 */
+async function appendAssistantMessage(name, text, plan) {
+    const all = (await idbGet(K.sessions)) || {};
+    const list = all[name] || [];
+    list.push({ role: 'assistant', content: text });
+    all[name] = list.slice(-400);
+    await idbSet(K.sessions, all);
+
+    await addUnread(name, countBubbles(text));
+    await touchSeen(name);
+
+    if (plan) {
+        const plans = await loadPlans(name);
+        const idx = plans.findIndex((x) => x.at === plan.at && x.topic === plan.topic);
+        if (idx >= 0) {
+            plans[idx].asked = true;
+            await savePlans(name, plans);
+        }
+    }
+}
+
+/** 生成一条「没人问他、他自己说」的消息，只返回文本 */
+async function generateUnprompted(card, plan) {
+    const query = plan ? plan.topic : '';
+    const [facts, summaries] = await Promise.all([
+        pickFacts(card.name, query, 6),
+        loadSummaries(card.name),
+    ]);
+
+    let system = buildSystemPrompt(card, [], facts, summaries);
+
+    if (plan) {
+        system += `\n\n【现在】对方之前跟你提过：${plan.quote}\n`
+                + `（就是「${plan.topic}」这件事）现在时间到了，你想起来，顺口问一句。\n`
+                + '发 1~2 句，像随口一问，不要像客服回访，不要说「不知道你还记不记得」。';
+    } else {
+        system += '\n\n【现在】你正闲着，忽然想起对方，想主动说句话。\n'
+                + '发 1~2 句就好，像随手发个微信。不要说「在吗」「忙不忙」「好久没联系」这类客套，\n'
+                + '可以说你在做什么、想起他之前说过的事、或者问他一件具体的小事。';
+    }
+
+    const all = (await idbGet(K.sessions)) || {};
+    const messages = [{ role: 'system', content: system }];
+    for (const turn of (all[card.name] || []).slice(-6)) {
+        if (turn.role === 'user' && turn.image) {
+            messages.push({ role: 'user', content: turn.content + '（对方发来一张图片）' });
+        } else {
+            messages.push({ role: turn.role, content: turn.content });
+        }
+    }
+    messages.push({ role: 'user', content: '（对方这会儿没说话）' });
+
+    const reply = await llm(messages, 0.9);
+    return reply && reply.trim() ? reply : null;
+}
+
+/** 启动时扫一遍：到点的追问、隔太久的搭话，生成好放那儿等你 */
+async function scanIncoming() {
+    if (cfg.proactive === false || !cfg.key) return;
+
+    const personas = (await idbGet(K.personas)) || {};
+    const seenMap = (await idbGet(K.seen)) || {};
+    const sessions = (await idbGet(K.sessions)) || {};
+
+    let produced = 0;
+    for (const name of Object.keys(personas)) {
+        if (produced >= 3) break;                       // 一次别生成太多，费钱也费时
+        if (state.persona && state.persona.name === name) continue;   // 正开着的那个不插
+
+        const history = sessions[name] || [];
+        if (!history.length) continue;                  // 没聊过就不搭话
+
+        const plan = await duePlan(name);
+        const idle = Date.now() - (seenMap[name] || 0);
+        if (!plan && idle < PROACTIVE_AFTER) continue;
+
+        try {
+            const text = await generateUnprompted(personas[name], plan);
+            if (text) {
+                await appendAssistantMessage(name, text, plan);
+                produced++;
+            }
+        } catch (e) {
+            // 单个失败不影响别的
+        }
+    }
+
+    if (produced) await renderPersonaList();
+}
+
 // ---- 主动消息 ----
 const PROACTIVE_AFTER = 3 * 3600 * 1000;   // 3 小时没说话，下次打开他会来找你
 const PLAN_WINDOW = 72 * 3600 * 1000;      // 只记 72 小时内的安排
 const PLAN_JITTER = 45 * 60 * 1000;        // 到点后随机偏 0~45 分钟，别太准
 const PLAN_MAX = 10;
-const PROACTIVE_IDLE = 1500;               // 进聊天页后等 1.5 秒再发，别太急
 
 async function touchSeen(name) {
     const all = (await idbGet(K.seen)) || {};
     all[name] = Date.now();
     await idbSet(K.seen, all);
-}
-
-/** 先说对方提过的那件事，这是最该主动开口的时机 */
-async function followUpPlan(card) {
-    if (!cfg.key) return false;
-
-    const plan = await duePlan(card.name);
-    if (!plan) return false;
-
-    try {
-        const [facts, summaries] = await Promise.all([
-            pickFacts(card.name, plan.topic, 6),
-            loadSummaries(card.name),
-        ]);
-        let system = buildSystemPrompt(card, [], facts, summaries);
-        system += `\n\n【现在】对方之前跟你提过：${plan.quote}\n`
-                + `（就是「${plan.topic}」这件事）现在时间到了，你想起来，顺口问一句。\n`
-                + '发 1~2 句，像随口一问，不要像客服回访，不要说「不知道你还记不记得」。';
-
-        const messages = [{ role: 'system', content: system }];
-        for (const turn of state.history.slice(-6)) {
-            if (turn.role === 'user' && turn.image) {
-                messages.push({ role: 'user', content: turn.content + '（对方发来一张图片）' });
-            } else {
-                messages.push({ role: turn.role, content: turn.content });
-            }
-        }
-        messages.push({ role: 'user', content: '（对方这会儿没说话）' });
-
-        const reply = await llm(messages, 0.9);
-        if (!reply || !state.persona || state.persona.name !== card.name) return false;
-
-        await renderAssistantText(reply, undefined, true);
-        state.history.push({ role: 'assistant', content: reply });
-        await saveSession(card.name, state.history);
-
-        const list = await loadPlans(card.name);
-        const idx = list.findIndex((x) => x.at === plan.at && x.topic === plan.topic);
-        if (idx >= 0) {
-            list[idx].asked = true;
-            await savePlans(card.name, list);
-        }
-        await touchSeen(card.name);
-        return true;
-    } catch (e) {
-        return false;
-    }
-}
-
-/** 隔得够久的话，让角色主动发一条。失败静默跳过。 */
-async function maybeProactive(card) {
-    if (cfg.proactive === false || !cfg.key) return;
-    if (!state.history.length) return;          // 没聊过就别冒出来
-
-    const all = (await idbGet(K.seen)) || {};
-    const last = all[card.name] || 0;
-    if (Date.now() - last < PROACTIVE_AFTER) return;
-
-    await delay(PROACTIVE_IDLE);
-    if (!state.persona || state.persona.name !== card.name) return;
-
-    try {
-        const [facts, summaries] = await Promise.all([
-            pickFacts(card.name, '', 6),
-            loadSummaries(card.name),
-        ]);
-        let system = buildSystemPrompt(card, [], facts, summaries);
-        system += '\n\n【现在】你正闲着，忽然想起对方，想主动说句话。\n'
-                + '发 1~2 句就好，像随手发个微信。不要说「在吗」「忙不忙」「好久没联系」这类客套，\n'
-                + '可以说你在做什么、想起他之前说过的事、或者问他一件具体的小事。';
-
-        const messages = [{ role: 'system', content: system }];
-        for (const turn of state.history.slice(-6)) {
-            if (turn.role === 'user' && turn.image) {
-                messages.push({ role: 'user', content: turn.content + '（对方发来一张图片）' });
-            } else {
-                messages.push({ role: turn.role, content: turn.content });
-            }
-        }
-        messages.push({ role: 'user', content: '（对方这会儿没说话）' });
-
-        const reply = await llm(messages, 0.9);
-        if (!reply || !state.persona || state.persona.name !== card.name) return;
-
-        await renderAssistantText(reply, undefined, true);
-        state.history.push({ role: 'assistant', content: reply });
-        await saveSession(card.name, state.history);
-        await touchSeen(card.name);
-    } catch (e) {
-        // 主动消息失败就算了，不打扰用户
-    }
 }
 
 /** 把图片压到指定边长，返回 dataURL。手机拍的原图动辄几 MB，直接发会很慢 */
@@ -1715,6 +1746,10 @@ $('delBtn').onclick = async () => {
     delete seen[name];
     await idbSet(K.seen, seen);
 
+    const unread = (await idbGet(K.unread)) || {};
+    delete unread[name];
+    await idbSet(K.unread, unread);
+
     $('moreDlg').close();
     closeChat();
 };
@@ -1733,6 +1768,8 @@ $('delBtn').onclick = async () => {
 
     if (!cfg.key) {
         openSettings('第一次用，先填 API Key');
+    } else {
+        scanIncoming();   // 后台把到点的消息生成好，列表上出红点
     }
 
     if ('serviceWorker' in navigator) {
