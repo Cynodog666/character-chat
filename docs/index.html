@@ -278,6 +278,7 @@
         <div class="actions" style="flex-direction:column;gap:8px">
             <button class="btn" id="clearMemBtn" style="width:100%">清除记忆</button>
             <button class="btn" id="clearSessBtn" style="width:100%">清空聊天记录</button>
+            <button class="btn" id="restoreBtn" style="width:100%">恢复上次备份</button>
             <button class="btn" id="exportOneBtn" style="width:100%">导出这个角色</button>
             <button class="btn" id="delBtn" style="width:100%;color:#c0392b">删除角色</button>
         </div>
@@ -409,6 +410,7 @@ const K = {
     plans: 'plans',             // { name: [{ at, topic, quote, asked }] } 对方提过的未来安排
     unread: 'unread',           // { name: n } 没看的消息条数
     world: 'world',             // [{ sub, fact, from, at }] 所有角色共享的近况
+    sessionBackup: 'session-backup',  // { name: [msg] } 被大幅覆盖前的上一版
     corpus: (src) => `corpus:${src}`,  // { source, chunks, vectors }
     corpusIndex: 'corpus-index',       // [source, ...]
 };
@@ -1058,10 +1060,33 @@ async function loadSession(name) {
     return all[name] || [];
 }
 
-async function saveSession(name, messages) {
+async function saveSession(name, messages, opts) {
     const all = (await idbGet(K.sessions)) || {};
+    const old = all[name] || [];
+
+    // 防呆：原本有一堆记录，这次却只剩零星几条（多半是 bug 或误操作），
+    // 先把旧的留一份，别直接盖掉。
+    const shrinking = old.length >= 10 && messages.length < old.length / 2;
+    if (shrinking && !(opts && opts.allowShrink)) {
+        const bak = (await idbGet(K.sessionBackup)) || {};
+        bak[name] = old;
+        await idbSet(K.sessionBackup, bak);
+    }
+
     all[name] = messages.slice(-400);
     await idbSet(K.sessions, all);
+}
+
+async function loadSessionBackup(name) {
+    const all = (await idbGet(K.sessionBackup)) || {};
+    return all[name] || null;
+}
+
+async function restoreSessionBackup(name) {
+    const bak = await loadSessionBackup(name);
+    if (!bak) return 0;
+    await saveSession(name, bak, { allowShrink: true });
+    return bak.length;
 }
 
 /* =========================================================================
@@ -1980,6 +2005,22 @@ $('moreBtn').onclick = async () => {
 };
 $('moreCancel').onclick = () => $('moreDlg').close();
 
+$('restoreBtn').onclick = async () => {
+    if (!state.persona) return;
+    const name = state.persona.name;
+    const bak = await loadSessionBackup(name);
+    if (!bak) {
+        alert('没有可恢复的备份。\n\n只有「记录突然大幅变短」时才会自动留一份。');
+        return;
+    }
+    if (!confirm(`恢复「${name}」上一次被覆盖前的 ${bak.length} 条记录？当前记录会被替换。`)) return;
+
+    const n = await restoreSessionBackup(name);
+    $('moreDlg').close();
+    await openChat(state.persona);
+    alert(`已恢复 ${n} 条`);
+};
+
 $('clearMemBtn').onclick = async () => {
     if (!state.persona) return;
     if (!confirm('清除「' + state.persona.name + '」记住的关于你的事？')) return;
@@ -1990,7 +2031,7 @@ $('clearMemBtn').onclick = async () => {
 $('clearSessBtn').onclick = async () => {
     if (!state.persona) return;
     if (!confirm('清空和「' + state.persona.name + '」的聊天记录？记忆不受影响。')) return;
-    await saveSession(state.persona.name, []);
+    await saveSession(state.persona.name, [], { allowShrink: true });
     $('moreDlg').close();
     closeChat();
 };
