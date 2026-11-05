@@ -1861,9 +1861,35 @@ $('importFile').onchange = async (e) => {
         const summaries = (await idbGet(K.summaries)) || {};
 
         Object.assign(personas, data.personas || {});
+
+        // 对话记录按角色整体替换——导入就是为了恢复那一段
         Object.assign(sessions, data.sessions || {});
-        Object.assign(memories, data.memories || {});
-        Object.assign(summaries, data.summaries || {});
+
+        // 记忆按主题合并：同主题保留更新时间更晚的那条，别让旧备份盖掉新记的
+        for (const [name, items] of Object.entries(data.memories || {})) {
+            const cur = memories[name] || [];
+            const map = new Map(cur.map((f) => [String(f.topic || '').replace(/\s+/g, ''), f]));
+            for (const f of items || []) {
+                if (!f || !f.content) continue;
+                const key = String(f.topic || f.content.slice(0, 12)).replace(/\s+/g, '');
+                const prev = map.get(key);
+                if (!prev || (f.updated_at || 0) >= (prev.updated_at || 0)) {
+                    map.set(key, { topic: key, content: f.content, updated_at: f.updated_at || 0 });
+                }
+            }
+            memories[name] = [...map.values()].slice(-50);
+        }
+
+        // 总结去重后合并，保留最近的
+        for (const [name, items] of Object.entries(data.summaries || {})) {
+            const cur = summaries[name] || [];
+            const seen = new Set(cur.map((s) => s.text));
+            const merged = [...cur];
+            for (const s of items || []) {
+                if (s && s.text && !seen.has(s.text)) { merged.push(s); seen.add(s.text); }
+            }
+            summaries[name] = merged.slice(-MAX_SUMMARIES);
+        }
         if (Array.isArray(data.world) && data.world.length) await addWorldFacts(data.world);
 
         await idbSet(K.personas, personas);
