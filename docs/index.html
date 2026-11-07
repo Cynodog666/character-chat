@@ -1064,17 +1064,20 @@ async function saveSession(name, messages, opts) {
     const all = (await idbGet(K.sessions)) || {};
     const old = all[name] || [];
 
-    // 防呆：原本有一堆记录，这次却只剩零星几条（多半是 bug 或误操作），
-    // 先把旧的留一份，别直接盖掉。
+    // 防呆：原本有一堆记录，这次却只剩零星几条（多半是 bug 或误操作）。
+    // 不光要留备份，还要拒绝写入——备份只是补救，不写才是真正防住。
     const shrinking = old.length >= 10 && messages.length < old.length / 2;
     if (shrinking && !(opts && opts.allowShrink)) {
         const bak = (await idbGet(K.sessionBackup)) || {};
         bak[name] = old;
         await idbSet(K.sessionBackup, bak);
+        console.warn('拦截一次异常缩短的写入', name, old.length, '->', messages.length);
+        return false;
     }
 
     all[name] = messages.slice(-400);
     await idbSet(K.sessions, all);
+    return true;
 }
 
 async function loadSessionBackup(name) {
@@ -1210,8 +1213,13 @@ async function renderPersonaList() {
 
 async function openChat(card) {
     renderSeq++;
+
+    // 先把会话读出来，再一次性赋值。原来先把 state.history 清空再去读盘，
+    // 中间那几十毫秒里若有定时搭话触发，会拿到空数组把历史存回去。
+    const history = await loadSession(card.name);
+
     state.persona = card;
-    state.history = [];
+    state.history = history;
     state.lastDay = '';
 
     $('chatTitle').textContent = card.name;
@@ -1219,8 +1227,6 @@ async function openChat(card) {
     $('listScreen').classList.add('hidden');
     $('chatScreen').classList.remove('hidden');
 
-    const history = await loadSession(card.name);
-    state.history = history;
     if (history.length) {
         history.forEach((m, i) => {
             if (m.role === 'assistant') renderAssistantText(m.content, i === 0 ? todayStr() : undefined);
@@ -1360,7 +1366,7 @@ async function compactHistory(name, hist) {
         if (state.persona && state.persona.name === name && state.history === list) {
             state.history = trimmed;      // 还停在这个角色，界面同步
         }
-        await saveSession(name, trimmed);  // 存档永远按原角色写
+        await saveSession(name, trimmed, { allowShrink: true });  // 主动压缩，放行
     } catch (e) {
         // 压缩失败就算了，历史留着不动
     }
@@ -1547,8 +1553,10 @@ async function pushUnprompted(card, plan) {
     if (!text) return false;
 
     if (state.persona && state.persona.name === card.name) {
-        // 渲染要花几秒，期间用户可能切走，所以先把数组抓住
+        // 渲染要花几秒，期间用户可能切走，所以先把数组抓住；
+        // 拿到的若还是空数组（刚进聊天页、还没读盘），就别动存档
         const hist = state.history;
+        if (!hist || !hist.length) return false;
         await renderAssistantText(text, undefined, true);
         hist.push({ role: 'assistant', content: text });
         await saveSession(card.name, hist);
