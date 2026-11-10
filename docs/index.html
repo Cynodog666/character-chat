@@ -314,6 +314,7 @@ const DEFAULT_CFG = {
 
 let cfg = { ...DEFAULT_CFG };
 let state = { persona: null, history: [], lastDay: '' };
+let personaNames = [];   // 角色名缓存，用来判断一句话里有没有提到别人
 // 待发送的图片：send 是发给模型的大图，thumb 是存本地/显示用的小图
 let pendingImage = null;
 
@@ -1033,8 +1034,12 @@ async function sendMessage() {
         await saveSession(name, hist);
         await touchSeen(name);
 
-        // 只有像在透露自己的事时才抽记忆，闲聊不花这次钱
-        if (looksLikePersonalInfo(text)) await rememberFact(name, text, reply);
+        // 抽记忆要花钱，所以按内容判断：
+        // 说自己的事、提到日程、或提到别的角色，才抽一次（顺带更新共享近况）
+        const shouldExtract = looksLikePersonalInfo(text)
+            || TIME_HINT.test(text)
+            || mentionsOther(name, text, reply);
+        if (shouldExtract) await rememberFact(name, text, reply);
         rememberPlan(name, text);      // 识别「明天早上有课」这类安排
         compactHistory(name, hist);    // 后台压缩，不阻塞这一轮
     } catch (err) {
@@ -1185,6 +1190,7 @@ async function renderPersonaList() {
         return;
     }
 
+    personaNames = names;
     const unread = (await idbGet(K.unread)) || {};
 
     list.innerHTML = names.map((n) => {
@@ -1300,6 +1306,13 @@ function needsRetrieval(text) {
 
 // 像在透露自己的信息
 const PERSONAL_HINT = /我叫|我是|我的名字|我今年|我\d+岁|我在.*(上学|读书|工作|上班|实习)|我做|我住|我家|我老家|我喜欢|我不喜欢|我讨厌|我专业|我学|我生日|我最近|我打算|我要去|我明天|我后天|我下周|我们约|答应|说好/;
+
+/** 这段话里有没有提到别的角色（提到就值得抽一次，好让共享近况有内容） */
+function mentionsOther(name, ...texts) {
+    const others = personaNames.filter((n) => n && n !== name);
+    if (!others.length) return false;
+    return others.some((n) => texts.some((t) => t && String(t).includes(n)));
+}
 
 /** 这句话值不值得抽一次长期记忆 */
 function looksLikePersonalInfo(text) {
