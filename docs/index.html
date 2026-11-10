@@ -1637,9 +1637,22 @@ async function idleTick() {
 }
 
 /** 启动时扫一遍：到点的追问、隔太久的搭话，生成好放那儿等你 */
-async function scanIncoming() {
-    if (cfg.proactive === false || !cfg.key) return;
+let scanning = false;
 
+/** opts.plansOnly=true 时只处理到期的计划，不管「隔太久没说话」那种 */
+async function scanIncoming(opts) {
+    if (cfg.proactive === false || !cfg.key) return;
+    if (scanning) return;                 // 上一次还没跑完
+    scanning = true;
+
+    try {
+        await scanIncomingInner(opts);
+    } finally {
+        scanning = false;
+    }
+}
+
+async function scanIncomingInner(opts) {
     const personas = (await idbGet(K.personas)) || {};
     const seenMap = (await idbGet(K.seen)) || {};
     const sessions = (await idbGet(K.sessions)) || {};
@@ -1660,6 +1673,7 @@ async function scanIncoming() {
         }
 
         const plan = await duePlan(name);
+        if (!plan && opts && opts.plansOnly) continue;   // 只补计划时，跳过闲聊触发
         const idle = Date.now() - last;
         if (!plan && idle < PROACTIVE_AFTER) continue;
 
@@ -2112,6 +2126,11 @@ $('delBtn').onclick = async () => {
     delete seen[name];
     await idbSet(K.seen, seen);
 
+    // 共享近况是所有人的，只删掉涉及这个角色的条目，别整块清空
+    const world = (await idbGet(K.world)) || [];
+    const kept = world.filter((w) => w.sub !== name && w.from !== name);
+    if (kept.length !== world.length) await idbSet(K.world, kept);
+
     const unread = (await idbGet(K.unread)) || {};
     delete unread[name];
     await idbSet(K.unread, unread);
@@ -2140,6 +2159,12 @@ $('delBtn').onclick = async () => {
 
     scheduleIdle();
     setInterval(idleTick, IDLE_CHECK_MS);
+
+    // App 一直开着时，隔一阵补一次到期的计划（挂两天不关也不会漏）
+    setInterval(() => {
+        if (document.hidden) return;
+        scanIncoming({ plansOnly: true });
+    }, 10 * 60 * 1000);
 
     // 从后台/熄屏回来：如果那个请求还挂着，多半已经死了，掐掉让用户重发
     document.addEventListener('visibilitychange', () => {
