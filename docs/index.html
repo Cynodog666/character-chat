@@ -1647,6 +1647,8 @@ async function scanIncoming(opts) {
 
     try {
         await scanIncomingInner(opts);
+    } catch (e) {
+        // 扫描失败不打扰用户，下次再来
     } finally {
         scanning = false;
     }
